@@ -74,6 +74,10 @@ ignore = [
     "RUF012",
 ]
 
+# Same rationale as the service repo: don't strip `# noqa` directives even
+# if a particular ruff version thinks they're unused.
+unfixable = ["RUF100"]
+
 [tool.ruff.lint.per-file-ignores]
 "experiments/**/*" = ["E501", "T20"]    # experiments may have long lines and prints
 "notebooks/**/*"   = ["E501", "T20"]

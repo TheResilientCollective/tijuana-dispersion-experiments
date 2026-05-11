@@ -253,9 +253,9 @@ def main():
                 row[f"peak_ratio_{rname}"] = m[rname]["peak_ratio"]
         rows.append(row)
         if (i + 1) % 50 == 0:
-            print(f"  {i+1}/{n_samples}  ({(time.time()-t0)/(i+1)*1000:.0f} ms/run)")
+            print(f"  {i + 1}/{n_samples}  ({(time.time() - t0) / (i + 1) * 1000:.0f} ms/run)")
     elapsed = time.time() - t0
-    print(f"\nTotal: {elapsed:.1f} s  ({elapsed/n_samples*1000:.0f} ms/run)\n")
+    print(f"\nTotal: {elapsed:.1f} s  ({elapsed / n_samples * 1000:.0f} ms/run)\n")
 
     df_results = pd.DataFrame(rows)
     df_results.to_csv(OUT / "sensitivity_samples.csv", index=False)
@@ -327,9 +327,9 @@ def main():
             indent=2,
         )
     )
-    print(f"Best parameters saved to {OUT/'best_parameters.json'}")
-    print(f"Full sample results: {OUT/'sensitivity_samples.csv'}")
-    print(f"Sensitivity table:   {OUT/'sensitivities.csv'}")
+    print(f"Best parameters saved to {OUT / 'best_parameters.json'}")
+    print(f"Full sample results: {OUT / 'sensitivity_samples.csv'}")
+    print(f"Sensitivity table:   {OUT / 'sensitivities.csv'}")
 
 
 if __name__ == "__main__":

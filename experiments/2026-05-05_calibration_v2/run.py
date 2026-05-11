@@ -293,9 +293,7 @@ def main():
     arch_counts = pd.Series([s.archetype for s in sources]).value_counts()
     for arch, n in arch_counts.items():
         print(f"  {arch:<10} {n}")
-    print(
-        f"\nWindow: {len(hours)}h × {len(RECEPTORS)} receptors = " f"{(~np.isnan(obs)).sum()} obs\n"
-    )
+    print(f"\nWindow: {len(hours)}h × {len(RECEPTORS)} receptors = {(~np.isnan(obs)).sum()} obs\n")
 
     # ---------- bounded inversion ---------- #
     print("--- Bounded NNLS with archetype priors ---")
@@ -362,8 +360,8 @@ def main():
         else:
             corr = np.corrcoef(pred[valid, r_idx], obs[valid, r_idx])[0, 1]
         print(
-            f"  {rname:<14}  pred_max={np.nanmax(pred[:,r_idx]):7.1f}  "
-            f"obs_max={np.nanmax(obs[:,r_idx]):7.1f}  r={corr:.2f}"
+            f"  {rname:<14}  pred_max={np.nanmax(pred[:, r_idx]):7.1f}  "
+            f"obs_max={np.nanmax(obs[:, r_idx]):7.1f}  r={corr:.2f}"
         )
     print()
 

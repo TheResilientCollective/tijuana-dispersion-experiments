@@ -18,7 +18,12 @@ jobs:
         with:
           enable-cache: true
       - run: uv python install 3.12
-      - run: uv sync --all-extras
+      # The `tijuana-dispersion` dep is a Git VCS pin to a private repo. CI
+      # doesn't need it for lint/format/secret checks, and the runner has no
+      # cross-repo credentials by default — so skip it here. To enable full
+      # installs in CI later, add a PAT secret with repo scope and configure
+      # git insteadOf to use it.
+      - run: uv sync --all-extras --no-install-package tijuana-dispersion
       - name: ruff format check
         run: uv run ruff format --check .
       - name: ruff lint
@@ -65,7 +70,10 @@ jobs:
         with:
           enable-cache: true
       - run: uv python install 3.12
-      - run: uv sync --all-extras
+      # See lint job: skip the private `tijuana-dispersion` dep in CI. When
+      # the test suite grows to exercise that dep, add a PAT secret and
+      # remove this flag.
+      - run: uv sync --all-extras --no-install-package tijuana-dispersion
       - name: pytest (allowed to be empty)
         run: uv run pytest --co -q || true   # collect-only first to avoid hard fail on empty
       - name: pytest run

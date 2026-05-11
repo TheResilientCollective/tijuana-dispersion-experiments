@@ -7,9 +7,6 @@ requires-python = "==3.12.*"
 license = { text = "MIT" }
 
 dependencies = [
-    # Pin to the service repo via Git ref. Update this when the service releases.
-    "tijuana-dispersion @ git+https://github.com/theresilientcollective/tijuana-dispersion.git@v0.3.0",
-
     # analysis stack
     "numpy>=1.26,<3.0",
     "pandas>=2.2,<3.0",
@@ -31,6 +28,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The service-repo dependency lives in its own opt-in extra so CI in this
+# repo can `uv sync --extra dev` without needing cross-repo credentials to
+# clone the (currently-private) `tijuana-dispersion` Git ref. Local dev
+# and the NRP container image install with `--extra service` (or
+# `--all-extras`) to bring it in.
+service = [
+    "tijuana-dispersion @ git+https://github.com/theresilientcollective/tijuana-dispersion.git@v0.3.0",
+]
 dev = [
     "pytest>=8.0,<9.0",
     "mypy>=1.10,<2.0",

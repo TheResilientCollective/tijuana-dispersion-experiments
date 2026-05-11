@@ -2459,7 +2459,6 @@ dependencies = [
     { name = "requests" },
     { name = "salib" },
     { name = "scipy" },
-    { name = "tijuana-dispersion" },
 ]
 
 [package.optional-dependencies]
@@ -2471,6 +2470,9 @@ dev = [
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "ruff" },
+]
+service = [
+    { name = "tijuana-dispersion" },
 ]
 
 [package.metadata]
@@ -2495,9 +2497,9 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6,<1.0" },
     { name = "salib", specifier = ">=1.5,<2.0" },
     { name = "scipy", specifier = ">=1.12,<2.0" },
-    { name = "tijuana-dispersion", git = "https://github.com/theresilientcollective/tijuana-dispersion.git?rev=v0.3.0" },
+    { name = "tijuana-dispersion", marker = "extra == 'service'", git = "https://github.com/theresilientcollective/tijuana-dispersion.git?rev=v0.3.0" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["service", "dev"]
 
 [[package]]
 name = "tinycss2"

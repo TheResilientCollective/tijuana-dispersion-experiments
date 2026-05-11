@@ -23,7 +23,7 @@ jobs:
       # cross-repo credentials by default — so skip it here. To enable full
       # installs in CI later, add a PAT secret with repo scope and configure
       # git insteadOf to use it.
-      - run: uv sync --all-extras --no-install-package tijuana-dispersion
+      - run: uv sync --extra dev
       - name: ruff format check
         run: uv run ruff format --check .
       - name: ruff lint
@@ -41,10 +41,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check for np.random in non-test code
         run: |
-          # Scan emissions_research and any analysis script for unannotated random use
+          # Scan emissions_research and any analysis script for unannotated
+          # random use. The checker script itself (scripts/check_no_mock_data.py)
+          # contains these patterns by design — exclude it.
           violations=$(grep -rEn 'np\.random\.|numpy\.random\.' \
-              emissions_research/ scripts/ nrp/ 2>/dev/null | \
-              grep -v '# random ok:' || true)
+              emissions_research/ scripts/ nrp/ 2>/dev/null \
+              --exclude=check_no_mock_data.py \
+              | grep -v '# random ok:' || true)
           if [ -n "$violations" ]; then
             echo "::error::np.random usage outside tests without '# random ok: <reason>' annotation"
             echo "$violations"
@@ -53,9 +56,11 @@ jobs:
 
       - name: Check for placeholder data fallbacks
         run: |
-          # Patterns that suggest silent fallback to fake data
+          # Patterns that suggest silent fallback to fake data. The checker
+          # script itself defines these patterns; exclude it.
           pattern='return\s+(0|0\.0|np\.zeros|\[\])\s*#.*placeholder|mock_|fake_|dummy_'
           violations=$(grep -rEn "$pattern" emissions_research/ scripts/ 2>/dev/null \
+            --exclude=check_no_mock_data.py \
             | grep -v '# random ok:' || true)
           if [ -n "$violations" ]; then
             echo "::warning::Possible synthetic-data fallback patterns detected (review):"
@@ -73,12 +78,22 @@ jobs:
       # See lint job: skip the private `tijuana-dispersion` dep in CI. When
       # the test suite grows to exercise that dep, add a PAT secret and
       # remove this flag.
-      - run: uv sync --all-extras --no-install-package tijuana-dispersion
-      - name: pytest (allowed to be empty)
-        run: uv run pytest --co -q || true   # collect-only first to avoid hard fail on empty
+      - run: uv sync --extra dev
+      - name: pytest (collect-only)
+        run: uv run pytest --co -q || true
       - name: pytest run
-        run: uv run pytest || \
-          ([ $? -eq 5 ] && echo "no tests; ok" || exit 1)
+        # pytest returns exit code 5 when no tests are collected; the
+        # experiments repo is allowed to have zero tests in `tests/` and
+        # `emissions_research/` while it's still in scaffolding phase.
+        run: |
+          set +e
+          uv run pytest
+          rc=$?
+          if [ $rc -eq 0 ] || [ $rc -eq 5 ]; then
+            exit 0
+          else
+            exit $rc
+          fi
 
   notebooks-stripped:
     runs-on: ubuntu-latest

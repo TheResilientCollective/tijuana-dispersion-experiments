@@ -1,0 +1,4 @@
+# Dagster workspace config — points to the pipeline module.
+load_from:
+  - python_file:
+      relative_path: dagster_pipeline.py

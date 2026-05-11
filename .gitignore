@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+
+# Build / dist
+build/
+dist/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# uv
+.uv-cache/
+
+# Environment
+.env
+.env.local
+
+# Data — never committed
+data/raw/
+data/processed/
+data/interim/
+
+# Experiment outputs — reproducible from run.py, never committed
+experiments/*/output/
+experiments/**/output/
+
+# Notebook artifacts (nbstripout handles outputs in source; this catches checkpoints)
+.ipynb_checkpoints/
+*-checkpoint.ipynb
+
+# Dagster
+.dagster/
+tmp_dagster_*/
+
+# Plotly / matplotlib offline caches
+*.html.html
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

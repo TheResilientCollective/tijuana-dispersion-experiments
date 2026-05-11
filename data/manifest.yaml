@@ -1,0 +1,65 @@
+# Data manifest for tijuana-dispersion-experiments
+#
+# Lists every external data file the experiments expect, with URL,
+# expected size, and sha256 checksum. Fetched at runtime via
+# scripts/fetch_data.py; never committed to git.
+#
+# When data changes:
+#   1. Update the URL or version
+#   2. Recompute checksums via scripts/fetch_data.py --update-checksums
+#   3. Commit the manifest update
+#   4. Note in the relevant experiment's RESULTS.md if it affects results
+#
+# sha256 may be 'pending' for files routinely refreshed (modeldata snapshots).
+# Set strict=true to fail rather than warn on checksum mismatch.
+
+version: 1
+
+datasets:
+  - name: modeldata_h2s_nofill
+    description: >
+      Hourly H₂S observations + meteorology for the three SDAPCD stations.
+      Refreshed approximately daily.
+    url: https://oss.resilientservice.mooo.com/resilentpublic/latest/tijuana/forecast_data/modeldata_h2s_nofill.parquet
+    fallback_url: https://oss.resilientservice.mooo.com/resilentpublic/latest/tijuana/forecast_data/modeldata_h2s_nofill.csv
+    target_path: data/modeldata_h2s_nofill.parquet
+    expected_size_mb: 12
+    sha256: pending
+    strict: false
+    refresh_interval: daily
+
+  - name: modeldata_forecast_15min
+    description: Forecast meteorology and predictors at 15-minute resolution.
+    url: https://oss.resilientservice.mooo.com/resilentpublic/latest/tijuana/forecast_data/modeldata_forecast_15min.parquet
+    fallback_url: https://oss.resilientservice.mooo.com/resilentpublic/latest/tijuana/forecast_data/modeldata_forecast_15min.csv
+    target_path: data/modeldata_forecast_15min.parquet
+    expected_size_mb: 3
+    sha256: pending
+    strict: false
+    refresh_interval: hourly
+
+  - name: complaints
+    description: County resident odor complaint records with location and timing.
+    url: https://oss.resilientservice.mooo.com/resilentpublic/latest/tijuana/complaints.parquet
+    fallback_url: https://oss.resilientservice.mooo.com/resilentpublic/latest/tijuana/complaints.csv
+    target_path: data/complaints.parquet
+    expected_size_mb: 2
+    sha256: pending
+    strict: false
+    refresh_interval: weekly
+
+  - name: emission_sources
+    description: Static metadata for 17 named H₂S emission source locations.
+    url: https://oss.resilientservice.mooo.com/resilentpublic/latest/tijuana/emission_sources.json
+    target_path: data/emission_sources.json
+    expected_size_mb: 0.01
+    sha256: pending
+    strict: false
+
+  - name: sensors
+    description: Static metadata for the three SDAPCD monitoring stations.
+    url: https://oss.resilientservice.mooo.com/resilentpublic/latest/tijuana/sensors.json
+    target_path: data/sensors.json
+    expected_size_mb: 0.01
+    sha256: pending
+    strict: false

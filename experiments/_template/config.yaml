@@ -1,0 +1,60 @@
+# Experiment configuration. Every parameter that affects results lives here;
+# nothing is hardcoded in run.py. Reproducibility is the point.
+
+experiment:
+  name: <slug>
+  date: <YYYY-MM-DD>
+  description: |
+    One paragraph: what this is.
+
+# Window of data to analyze
+window:
+  start: 2026-03-13T00:00:00-08:00
+  end: 2026-03-16T00:00:00-08:00
+
+# Which receptors to include
+receptors:
+  - SAN YSIDRO
+  - NESTOR - BES
+  - IB CIVIC CTR
+
+# Which sources to include (or how to construct them)
+sources:
+  named: all                # or a list of names
+  channel:
+    n_sources: 12
+    start_lat: 32.54064
+    start_lon: -117.05801
+    end_lat: 32.555
+    end_lon: -117.115
+  estuary_grid:
+    nx: 3
+    ny: 3
+    bbox: [32.555, -117.135, 32.580, -117.115]
+
+# Backend selection
+backend:
+  type: gaussian_plume       # or: ensemble, hysplit, puff
+  ensemble_weights:          # only relevant if type=ensemble
+    gaussian_plume: 0.5
+    puff: 0.3
+    hysplit: 0.2
+
+# Algorithmic parameters
+calibration:
+  method: bounded_nnls       # or: lhs, mcmc, sobol
+  prior_lambda: 0.5
+  smoothness_lambda: 0.3
+
+# Pinned data versions. Update if you intend to use a fresh snapshot.
+data:
+  modeldata_h2s_nofill:
+    sha256: pending
+    fetched_on: 2026-05-05
+
+# tijuana-dispersion package version (commit sha or release tag)
+package_pin:
+  tijuana_dispersion: main      # or e.g. v0.3.1
+
+# Random seed for any sampling-based step. None = non-reproducible (forbidden in this repo).
+seed: 42

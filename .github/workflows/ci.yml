@@ -1,0 +1,90 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --all-extras
+      - name: ruff format check
+        run: uv run ruff format --check .
+      - name: ruff lint
+        run: uv run ruff check .
+      - name: detect-secrets
+        run: |
+          uv run detect-secrets-hook \
+            --baseline .secrets.baseline \
+            $(git ls-files | grep -v '^.secrets.baseline$') || \
+            (echo "::error::Possible secret detected. Audit .secrets.baseline." && exit 1)
+
+  no-synthetic-data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for np.random in non-test code
+        run: |
+          # Scan emissions_research and any analysis script for unannotated random use
+          violations=$(grep -rEn 'np\.random\.|numpy\.random\.' \
+              emissions_research/ scripts/ nrp/ 2>/dev/null | \
+              grep -v '# random ok:' || true)
+          if [ -n "$violations" ]; then
+            echo "::error::np.random usage outside tests without '# random ok: <reason>' annotation"
+            echo "$violations"
+            exit 1
+          fi
+
+      - name: Check for placeholder data fallbacks
+        run: |
+          # Patterns that suggest silent fallback to fake data
+          pattern='return\s+(0|0\.0|np\.zeros|\[\])\s*#.*placeholder|mock_|fake_|dummy_'
+          violations=$(grep -rEn "$pattern" emissions_research/ scripts/ 2>/dev/null \
+            | grep -v '# random ok:' || true)
+          if [ -n "$violations" ]; then
+            echo "::warning::Possible synthetic-data fallback patterns detected (review):"
+            echo "$violations"
+          fi
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --all-extras
+      - name: pytest (allowed to be empty)
+        run: uv run pytest --co -q || true   # collect-only first to avoid hard fail on empty
+      - name: pytest run
+        run: uv run pytest || \
+          ([ $? -eq 5 ] && echo "no tests; ok" || exit 1)
+
+  notebooks-stripped:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv python install 3.12
+      - run: uv tool install nbstripout
+      - name: Verify notebooks are stripped
+        run: |
+          # nbstripout in check mode: returns nonzero if any notebook has non-stripped output
+          for nb in $(find . -name '*.ipynb' -not -path '*/.*' -not -path '*/output/*'); do
+            if ! uv tool run nbstripout --verify "$nb" 2>/dev/null; then
+              echo "::error::Notebook $nb has un-stripped outputs; run nbstripout"
+              exit 1
+            fi
+          done

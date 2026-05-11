@@ -1,0 +1,98 @@
+[project]
+name = "tijuana-dispersion-experiments"
+version = "0.1.0"
+description = "Calibration runs, sensitivity analyses, and NRP batch jobs for the Tijuana H2S dispersion project."
+readme = "README.md"
+requires-python = "==3.12.*"
+license = { text = "MIT" }
+
+dependencies = [
+    # Pin to the service repo via Git ref. Update this when the service releases.
+    "tijuana-dispersion @ git+https://github.com/theresilientcollective/tijuana-dispersion.git@v0.3.0",
+
+    # analysis stack
+    "numpy>=1.26,<3.0",
+    "pandas>=2.2,<3.0",
+    "pyarrow>=15.0,<20.0",
+    "scipy>=1.12,<2.0",
+    "matplotlib>=3.8,<4.0",
+    "pyyaml>=6.0,<7.0",
+    "requests>=2.31,<3.0",
+
+    # orchestration
+    "dagster>=1.7,<2.0",
+    "dagster-webserver>=1.7,<2.0",
+    "dagster-k8s>=0.23,<1.0",
+    "dagster-aws>=0.23,<1.0",        # S3Resource + S3PickleIOManager
+    "boto3>=1.34,<2.0",              # used by dagster-aws under the hood
+
+    # global sensitivity (used by the LHS / Sobol scripts)
+    "SALib>=1.5,<2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<9.0",
+    "mypy>=1.10,<2.0",
+    "ruff>=0.6,<1.0",
+    "pre-commit>=3.7,<5.0",
+    "detect-secrets>=1.5,<2.0",
+    "nbstripout>=0.7,<1.0",
+    "jupyter>=1.0",
+]
+
+[project.urls]
+Repository = "https://github.com/theresilientcollective/tijuana-dispersion-experiments"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+# The service-repo dependency is a direct VCS reference; hatchling needs
+# this opt-in to allow it.
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+# This repo isn't installed as a package; the build system is for `uv sync` consistency only.
+packages = []
+bypass-selection = true
+
+# ---------- ruff (looser than service) ----------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [".cache", "dist", "build", "data/raw", "**/output"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+    "B008",       # FastAPI / Dagster patterns use this
+    "RUF001",     # ambiguous unicode — intentional × σ μ in physics text
+    "RUF002",     # ditto in docstrings
+    "RUF003",     # ditto in comments
+    "RUF012",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"experiments/**/*" = ["E501", "T20"]    # experiments may have long lines and prints
+"notebooks/**/*"   = ["E501", "T20"]
+"tests/**/*"       = ["S101"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+# ---------- mypy (non-strict in this repo) ----------
+[tool.mypy]
+python_version = "3.12"
+strict = false
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "emissions_research.*"
+strict = true        # the one part of this repo that follows service-grade rules
+
+# ---------- pytest ----------
+[tool.pytest.ini_options]
+testpaths = ["tests", "emissions_research"]
+addopts = "-ra"

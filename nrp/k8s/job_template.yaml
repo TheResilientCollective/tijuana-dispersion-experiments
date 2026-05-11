@@ -1,0 +1,48 @@
+# Template Dagster fills in for each K8s Job submission.
+# Resource requests/limits, image, service account, etc.
+# Tune to match NRP's available node sizes.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ""  # set by Dagster per-run
+  labels:
+    project: tijuana-dispersion-experiments
+    workload: ""  # set by Dagster from asset group_name
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 86400  # cleanup pods 1 day after completion
+  template:
+    metadata:
+      labels:
+        project: tijuana-dispersion-experiments
+        workload: ""
+    spec:
+      restartPolicy: Never
+      serviceAccountName: dagster-nrp
+      containers:
+        - name: worker
+          image: ""  # set by Dagster (digest-pinned)
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          env:
+            - name: DAGSTER_RUN_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['dagster/run-id']
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: object-store-credentials
+                  key: access_key_id
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: object-store-credentials
+                  key: secret_access_key

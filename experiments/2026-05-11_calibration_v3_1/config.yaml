@@ -1,0 +1,77 @@
+# calibration v3.1 — per-archetype diel + relaxed bay cap + candidate NE source
+
+experiment:
+  name: calibration_v3_1
+  date: 2026-05-11
+  description: |
+    Triple change on top of v3:
+    1. Two diel amplitudes (land = drain+channel; water = estuary+bay+northeast)
+       sharing a single phase. (v3 used one global amplitude/phase.)
+    2. Bay archetype cap raised from 0.5 to 5.0 g/s. v3 hit the cap on
+       Otay River Outlet, so this lets the NNLS attribute more mass to the
+       bay-pond source under N-wind nocturnal regimes.
+    3. Two candidate sources NE of SAN YSIDRO ("Otay Mesa industrial")
+       with a "northeast" archetype (cap 2.0 g/s, prior 0.3 g/s) — direct
+       test of the missing-source hypothesis from Phase A.
+
+windows:
+  train:
+    start: "2026-02-01T00:00:00"
+    end:   "2026-04-01T00:00:00"
+  holdout:
+    start: "2026-04-01T00:00:00"
+    end:   "2026-04-15T00:00:00"
+  quick:
+    start: "2026-03-13T00:00:00"
+    end:   "2026-03-16T00:00:00"
+
+receptors:
+  - SAN YSIDRO
+  - NESTOR - BES
+  - IB CIVIC CTR
+
+sources:
+  channel:
+    n_sources: 12
+    start_lat: 32.54064
+    start_lon: -117.05801
+    end_lat: 32.555
+    end_lon: -117.115
+    seed_rate_g_s: 0.1
+  estuary_grid:
+    nx: 3
+    ny: 3
+    bbox: [32.555, -117.135, 32.580, -117.115]
+    seed_rate_g_s: 0.1
+  # Candidate sources NE of SAN YSIDRO testing the missing-source hypothesis.
+  northeast_candidates:
+    - { name: "Otay Mesa Industrial S", lat: 32.580, lon: -117.040, seed_rate_g_s: 0.3 }
+    - { name: "Otay Mesa Industrial N", lat: 32.595, lon: -117.040, seed_rate_g_s: 0.3 }
+
+# Archetype overrides (only changed entries listed; others inherit service defaults)
+archetype_overrides:
+  bounds:
+    bay: 5.0          # was 0.5 — relaxed per Phase A finding
+    northeast: 2.0    # new archetype
+  priors:
+    northeast: 0.3
+
+calibration:
+  prior_lambda: 0.5
+  smoothness_lambda: 0.3
+  outer:
+    diel_amplitude_land:  { initial: 1.5, bounds: [1.0, 3.5] }   # drain + channel
+    diel_amplitude_water: { initial: 1.5, bounds: [1.0, 3.5] }   # estuary + bay + northeast
+    diel_phase_hours:     { initial: 4.0, bounds: [0.0, 24.0] }
+    method: Nelder-Mead
+    maxiter: 300
+    xatol: 0.05
+    fatol: 1.0e-3
+
+data:
+  modeldata_h2s_nofill: ../../data/modeldata_h2s_nofill.parquet
+
+package_pin:
+  tijuana_dispersion: v0.3.0
+
+seed: 42

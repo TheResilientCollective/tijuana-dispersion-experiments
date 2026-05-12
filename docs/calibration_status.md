@@ -17,6 +17,87 @@ Don't delete old entries. The log is the project's memory.
 
 ---
 
+## 2026-05-11 — calibration_v3.1 (per-archetype diel + relaxed bay cap + candidate NE sources)
+
+**Question**: Phase A diagnostic ([2026-05-11_sy_north_residual_diagnostic](../experiments/2026-05-11_sy_north_residual_diagnostic/))
+identified two issues v3 didn't fix: the bay archetype cap was binding,
+and SAN YSIDRO showed a uniquely strong N-sector signal no existing
+source could explain. v3.1 changes three things at once: raise bay cap
+(0.5 → 5.0 g/s), add two hypothesized NE-of-SAN-YSIDRO sources
+(`northeast` archetype, cap 2.0 g/s), and split the diel amplitude into
+land vs water.
+
+**Result**: On the Apr 1-14 holdout window:
+- SAN YSIDRO r: 0.041 (original v3 source field) → 0.092 (v2 fit with
+  the new source field, no diel) → 0.114 (v3 single-amp diel) → 0.115
+  (v3.1 per-archetype diel).
+- Per-archetype diel adds essentially nothing on top of single-amp diel
+  on this holdout window — the model isn't expressive enough yet for
+  the land/water split to matter.
+- **The dominant lift (more than doubling SY holdout r) comes from
+  adding NE candidates + relaxing the bay cap** — neither of which is
+  about temporal modulation. The "structural" fix dominates the
+  "parametric diel" fix.
+
+NE candidate fitted rates (v2-style, no diel): Otay Mesa Industrial S =
+0.83 g/s, Otay Mesa Industrial N = 0.98 g/s. Neither hit its 2.0 cap.
+NNLS spontaneously attributes ~1.8 g/s to hypothesized sources NE of
+SAN YSIDRO — strong indirect evidence of a real source in that region.
+
+The v3.1 fit hits `amp_water = 3.5` at its upper bound, signalling that
+water-side sources want even stronger nocturnal amplification.
+
+**State change**:
+- We now believe there is a real source (or set of sources) NE of SAN
+  YSIDRO with ~1-2 g/s combined H₂S emissions. Otay Mesa industrial
+  area is the prime candidate region.
+- We now believe the bay archetype default cap of 0.5 g/s in
+  `tijuana_dispersion.calibration.ARCHETYPE_BOUNDS_G_S` is too tight;
+  ~2.0 would be a better default (worth a service-repo PR).
+- We now believe per-archetype-amplitude diel is **not** a worthwhile
+  refinement until the spatial source field is more complete. The
+  signal-to-noise on splitting the diel modulator is below the
+  spatial-correction signal.
+
+**Next**:
+1. v3.2 — expand the NE candidate grid (6-9 sources across the Otay
+   Mesa region). NNLS will reveal which locations light up.
+2. v3.3 — raise `amp_water` ceiling beyond 3.5, see if performance
+   keeps climbing or stabilises.
+3. v3.4 — exclude the documented Mar 13-15 spill from training; check
+   whether the inflated drain rates were spill-event artefacts.
+4. IB CIVIC CTR–specific diagnostic — this receptor stays stuck at
+   holdout r ~ 0.09 regardless of variant; needs its own work.
+
+---
+
+## 2026-05-11 — sy_north_residual_diagnostic (no-fitting analysis)
+
+**Question**: Where does the SAN YSIDRO N/NE-wind residual seen in v3
+come from?
+
+**Result**: Two distinct findings. (1) The v3 NNLS hit the bay
+archetype upper bound (0.5 g/s) on the Otay River Outlet bay source —
+the cap is the binding constraint, not source physics. Relaxing it
+should let more N-wind NESTOR signal get absorbed. (2) In the N and
+NNW wind sectors, SAN YSIDRO is uniquely elevated (30 ppb mean) while
+NESTOR is much lower (13 ppb) and IB sees essentially zero — opposite
+to every other sector. That geometric signature requires a source
+*east or north of SAN YSIDRO*, which no existing modelled source
+satisfies (all sources are in the river valley, *west* of SAN YSIDRO).
+
+**State change**:
+- The v2-era diagnostic "W/SW over-prediction at SAN YSIDRO" was
+  window-specific to Mar 13-15. On the broader Apr 1-14 holdout the
+  *northern* residual is much larger (~12 ppb mean vs ~1.5 ppb in
+  W/SW).
+- The dominant fix is structural (add missing sources / relax bounds),
+  not parametric (diel modulation).
+
+**Next**: v3.1 implements both fixes simultaneously (see entry above).
+
+---
+
 ## 2026-05-11 — calibration_v3 (diurnal modifier)
 
 **Question**: Does adding `f_diel(t)` on emission rates fix v2's

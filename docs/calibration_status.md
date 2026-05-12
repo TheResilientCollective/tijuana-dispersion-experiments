@@ -17,6 +17,45 @@ Don't delete old entries. The log is the project's memory.
 
 ---
 
+## 2026-05-11 — calibration_v3 (diurnal modifier)
+
+**Question**: Does adding `f_diel(t)` on emission rates fix v2's
+SAN YSIDRO W/SW over-prediction and the IB CIVIC CTR magnitude/timing
+mismatch identified by the sensitivity LHS?
+
+**Result**: Partial pass. v3 fits `diel_amplitude=1.75`, `phase=4:10 am`
+on Feb 1 – Mar 31, 2026; holdout on Apr 1-14. SAN YSIDRO holdout r
+improves from 0.041 (v2 refit) to 0.063 (v3); NESTOR-BES from 0.201
+to 0.211; IB CIVIC CTR essentially unchanged (0.091 → 0.088). However,
+the W/SW residual at SAN YSIDRO — the load-bearing acceptance criterion —
+grew from +1.39 to +1.76 ppb (got *worse*). Importantly, v2's
+originally-reported r=0.60/0.62 numbers were on the 72-hour Mar 13-15
+spill window; refit on the full Feb-Mar window v2's r is 0.39/0.15 at
+NESTOR/IB. The 2-month window is a much harder fit than v2 communicated.
+
+**State change**:
+- We now believe the diel modifier was the right shape of fix for the
+  v2 Mar 13-15 diagnostic but not for the *dominant* residual seen on
+  a broader holdout. The Apr 1-14 SAN YSIDRO residual is dominated by
+  *northern* winds where the model has zero sources and predicts ~0
+  while obs is 6-30 ppb. That points to a missing source east or NE of
+  SAN YSIDRO (Otay Mesa industrial? cross-border emission? local
+  background?), not a temporal-modulation problem.
+- We now believe v2's Mar 13-15 metrics were upper-bounded by the spill
+  event boosting signal. Going forward, calibration reports must include
+  holdout window numbers by default.
+
+**Next**:
+1. Investigate the SAN YSIDRO N/NE residual: identify candidate sources,
+   pull weather-station data colocated with SY to verify wind reading
+   isn't the issue.
+2. Per-archetype diel (drain/channel vs estuary) — currently a single
+   global multiplier.
+3. Expand outer optimization to include Q₁₀ and substrate params.
+4. Add a "background" or "Otay Mesa" source east of SY and refit.
+
+---
+
 ## 2026-05-05 — sensitivity_lhs
 
 **Question**: Which emissions-model parameters most influence the fit?

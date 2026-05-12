@@ -26,10 +26,15 @@ env/
 .env
 .env.local
 
-# Data — never committed
+# Data — never committed. data/manifest.yaml + data/README.md are the
+# only things tracked in this directory; the actual datasets are fetched
+# at runtime via scripts/fetch_data.py.
 data/raw/
 data/processed/
 data/interim/
+data/*.parquet
+data/*.csv
+data/*.json
 
 # Experiment outputs — reproducible from run.py, never committed
 experiments/*/output/

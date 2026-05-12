@@ -17,6 +17,56 @@ Don't delete old entries. The log is the project's memory.
 
 ---
 
+## 2026-05-12 — calibration_v3.2 (NE candidate grid sweep)
+
+**Question**: v3.1 added 2 fixed NE candidates (~1.8 g/s absorbed total)
+but the SY N-residual stayed at ~12 ppb. Does a 12-cell grid sweep
+across the Otay Mesa / cross-border area find a coherent source
+location?
+
+**Result**: Yes — and the spatial structure is sharp. On the Apr 1-14
+holdout SAN YSIDRO r climbs from 0.115 (v3.1, 2 candidates) to 0.200
+(v3.2, 12-grid + single-amp diel). Cumulative from the original v3
+(no NE sources): 0.041 → 0.200, a **5× improvement on SY**.
+NESTOR-BES holdout r climbs from 0.21 → 0.24 in parallel.
+
+Fitted rates show two dominant grid cells:
+- `ne11` at (32.575, -117.040) = 0.89 g/s — directly **north of SAN
+  YSIDRO** by ~2 km; centred in Otay Mesa industrial zone.
+- `ne30` at (32.610, -117.060) = 0.87 g/s — far NW, south edge of San
+  Diego Bay.
+
+Total NE absorption in v2-style fit: 4.51 g/s (vs 1.8 g/s with v3.1's
+2 fixed candidates). NNLS spontaneously builds a coherent spatial
+pattern when given freedom; this is strong evidence the source
+geometry is real, not a fitting artefact.
+
+**Side observation**: per-archetype-amplitude diel (v3.1) still does
+not beat single-amp diel (v3) on holdout, even with the richer grid.
+The land/water split is consistently a small holdout regression.
+Stop spending time on that variant — single-amp wins.
+
+**State change**:
+- We now strongly believe there's a real H₂S source near
+  (32.575, -117.040). Otay Mesa industrial / cross-border. Worth
+  physical ground-truthing.
+- A secondary source candidate near (32.610, -117.060) on the south
+  edge of San Diego Bay also lights up.
+- Per-archetype diel is *retired* as a hypothesis. Going forward,
+  single global amp + phase is the canonical diel form.
+
+**Next**:
+1. Refine grid in the hot zone (25 cells at 0.5 km spacing around
+   the two hot spots).
+2. v3.3: spill exclusion — remove documented spill hours from
+   training; check drain rate inflation.
+3. v3.4: IB CIVIC CTR diagnostic. Holdout r stuck at 0.087 regardless
+   of variant.
+4. Ground-truth (32.575, -117.040) against SDAPCD industrial inventory
+   and cross-border emission reports.
+
+---
+
 ## 2026-05-11 — calibration_v3.1 (per-archetype diel + relaxed bay cap + candidate NE sources)
 
 **Question**: Phase A diagnostic ([2026-05-11_sy_north_residual_diagnostic](../experiments/2026-05-11_sy_north_residual_diagnostic/))

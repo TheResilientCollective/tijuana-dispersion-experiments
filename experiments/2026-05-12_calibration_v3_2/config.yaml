@@ -1,0 +1,98 @@
+# calibration v3.2 — NE candidate grid sweep
+#
+# v3.1 added 2 candidate sources at (32.580, -117.040) and (32.595, -117.040)
+# and they absorbed ~1.8 g/s combined — strong indirect evidence of a real
+# source NE of SAN YSIDRO. v3.2 puts a 4×3 grid of candidates across the
+# Otay Mesa / cross-border region. NNLS picks which ones light up.
+#
+# Search box rationale:
+#   lat 32.555 .. 32.610  — from just north of SAN YSIDRO to mid Otay Mesa
+#   lon -117.060 .. -117.010 — east of NESTOR, covering the border region
+#   spacing ~ 0.018 deg (~2 km) — coarse enough that NNLS won't fight
+#                                  itself between adjacent candidates
+
+experiment:
+  name: calibration_v3_2
+  date: 2026-05-12
+  description: |
+    Replace v3.1's 2 NE candidates with a 4×3 = 12 grid sweep over the
+    Otay Mesa / cross-border area. Per-archetype diel modulation kept
+    as in v3.1. Goal: locate where the missing source(s) actually are.
+
+windows:
+  train:
+    start: "2026-02-01T00:00:00"
+    end:   "2026-04-01T00:00:00"
+  holdout:
+    start: "2026-04-01T00:00:00"
+    end:   "2026-04-15T00:00:00"
+  quick:
+    start: "2026-03-13T00:00:00"
+    end:   "2026-03-16T00:00:00"
+
+receptors:
+  - SAN YSIDRO
+  - NESTOR - BES
+  - IB CIVIC CTR
+
+sources:
+  channel:
+    n_sources: 12
+    start_lat: 32.54064
+    start_lon: -117.05801
+    end_lat: 32.555
+    end_lon: -117.115
+    seed_rate_g_s: 0.1
+  estuary_grid:
+    nx: 3
+    ny: 3
+    bbox: [32.555, -117.135, 32.580, -117.115]
+    seed_rate_g_s: 0.1
+  # 4×3 grid of NE candidates. Wider lat range now covers from just north
+  # of SAN YSIDRO (32.555) up to mid Otay Mesa (32.610), and lon from
+  # just east of the river valley (-117.06) almost to the border crossing
+  # zone (-117.01).
+  northeast_candidates:
+    # lat 32.555 (south row — just north of SY)
+    - { name: "ne00", lat: 32.555, lon: -117.060, seed_rate_g_s: 0.2 }
+    - { name: "ne01", lat: 32.555, lon: -117.040, seed_rate_g_s: 0.2 }
+    - { name: "ne02", lat: 32.555, lon: -117.020, seed_rate_g_s: 0.2 }
+    # lat 32.575 (middle row — N of SY by ~2 km)
+    - { name: "ne10", lat: 32.575, lon: -117.060, seed_rate_g_s: 0.2 }
+    - { name: "ne11", lat: 32.575, lon: -117.040, seed_rate_g_s: 0.2 }
+    - { name: "ne12", lat: 32.575, lon: -117.020, seed_rate_g_s: 0.2 }
+    # lat 32.595 (north row — Otay Mesa)
+    - { name: "ne20", lat: 32.595, lon: -117.060, seed_rate_g_s: 0.2 }
+    - { name: "ne21", lat: 32.595, lon: -117.040, seed_rate_g_s: 0.2 }
+    - { name: "ne22", lat: 32.595, lon: -117.020, seed_rate_g_s: 0.2 }
+    # lat 32.610 (far-north row)
+    - { name: "ne30", lat: 32.610, lon: -117.060, seed_rate_g_s: 0.2 }
+    - { name: "ne31", lat: 32.610, lon: -117.040, seed_rate_g_s: 0.2 }
+    - { name: "ne32", lat: 32.610, lon: -117.020, seed_rate_g_s: 0.2 }
+
+archetype_overrides:
+  bounds:
+    bay: 5.0
+    northeast: 2.0
+  priors:
+    northeast: 0.3
+
+calibration:
+  prior_lambda: 0.5
+  smoothness_lambda: 0.3
+  outer:
+    diel_amplitude_land:  { initial: 1.5, bounds: [1.0, 3.5] }
+    diel_amplitude_water: { initial: 1.5, bounds: [1.0, 3.5] }
+    diel_phase_hours:     { initial: 4.0, bounds: [0.0, 24.0] }
+    method: Nelder-Mead
+    maxiter: 300
+    xatol: 0.05
+    fatol: 1.0e-3
+
+data:
+  modeldata_h2s_nofill: ../../data/modeldata_h2s_nofill.parquet
+
+package_pin:
+  tijuana_dispersion: v0.3.0
+
+seed: 42

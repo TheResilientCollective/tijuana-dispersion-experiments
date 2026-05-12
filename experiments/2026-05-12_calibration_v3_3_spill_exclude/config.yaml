@@ -1,0 +1,100 @@
+# calibration v3.3 — same source field as v3.2 but exclude the
+# documented Mar 13-15 Stewart's Drain spill event from training.
+#
+# v3 / v3.1 / v3.2 all included this spill event (peak ~394 ppb at
+# NESTOR) in the training window. Drain rates fitted high — Stewart's
+# Drain at 2.86 g/s in v3 vs literature priors of 0.5 g/s. This
+# experiment tests whether excluding the spill gives lower, more
+# plausible drain baselines and improves holdout generalisation.
+
+experiment:
+  name: calibration_v3_3_spill_exclude
+  date: 2026-05-12
+  description: |
+    Same 12-cell NE grid as v3.2; same diel/bay settings. Training window
+    masks Mar 13 12:00 → Mar 16 00:00 PT (the documented spill event).
+    Compares against v3.2-style "unfiltered" fit on the same windows so
+    the effect of exclusion alone is isolated.
+
+windows:
+  train:
+    start: "2026-02-01T00:00:00"
+    end:   "2026-04-01T00:00:00"
+  # Hours within [exclude.start, exclude.end) are masked out of training.
+  # The model never sees the documented spill event during fitting.
+  exclude:
+    start: "2026-03-13T12:00:00"
+    end:   "2026-03-16T00:00:00"
+  holdout:
+    start: "2026-04-01T00:00:00"
+    end:   "2026-04-15T00:00:00"
+  quick:
+    start: "2026-03-13T00:00:00"
+    end:   "2026-03-16T00:00:00"
+
+receptors:
+  - SAN YSIDRO
+  - NESTOR - BES
+  - IB CIVIC CTR
+
+sources:
+  channel:
+    n_sources: 12
+    start_lat: 32.54064
+    start_lon: -117.05801
+    end_lat: 32.555
+    end_lon: -117.115
+    seed_rate_g_s: 0.1
+  estuary_grid:
+    nx: 3
+    ny: 3
+    bbox: [32.555, -117.135, 32.580, -117.115]
+    seed_rate_g_s: 0.1
+  # 4×3 grid of NE candidates. Wider lat range now covers from just north
+  # of SAN YSIDRO (32.555) up to mid Otay Mesa (32.610), and lon from
+  # just east of the river valley (-117.06) almost to the border crossing
+  # zone (-117.01).
+  northeast_candidates:
+    # lat 32.555 (south row — just north of SY)
+    - { name: "ne00", lat: 32.555, lon: -117.060, seed_rate_g_s: 0.2 }
+    - { name: "ne01", lat: 32.555, lon: -117.040, seed_rate_g_s: 0.2 }
+    - { name: "ne02", lat: 32.555, lon: -117.020, seed_rate_g_s: 0.2 }
+    # lat 32.575 (middle row — N of SY by ~2 km)
+    - { name: "ne10", lat: 32.575, lon: -117.060, seed_rate_g_s: 0.2 }
+    - { name: "ne11", lat: 32.575, lon: -117.040, seed_rate_g_s: 0.2 }
+    - { name: "ne12", lat: 32.575, lon: -117.020, seed_rate_g_s: 0.2 }
+    # lat 32.595 (north row — Otay Mesa)
+    - { name: "ne20", lat: 32.595, lon: -117.060, seed_rate_g_s: 0.2 }
+    - { name: "ne21", lat: 32.595, lon: -117.040, seed_rate_g_s: 0.2 }
+    - { name: "ne22", lat: 32.595, lon: -117.020, seed_rate_g_s: 0.2 }
+    # lat 32.610 (far-north row)
+    - { name: "ne30", lat: 32.610, lon: -117.060, seed_rate_g_s: 0.2 }
+    - { name: "ne31", lat: 32.610, lon: -117.040, seed_rate_g_s: 0.2 }
+    - { name: "ne32", lat: 32.610, lon: -117.020, seed_rate_g_s: 0.2 }
+
+archetype_overrides:
+  bounds:
+    bay: 5.0
+    northeast: 2.0
+  priors:
+    northeast: 0.3
+
+calibration:
+  prior_lambda: 0.5
+  smoothness_lambda: 0.3
+  outer:
+    diel_amplitude_land:  { initial: 1.5, bounds: [1.0, 3.5] }
+    diel_amplitude_water: { initial: 1.5, bounds: [1.0, 3.5] }
+    diel_phase_hours:     { initial: 4.0, bounds: [0.0, 24.0] }
+    method: Nelder-Mead
+    maxiter: 300
+    xatol: 0.05
+    fatol: 1.0e-3
+
+data:
+  modeldata_h2s_nofill: ../../data/modeldata_h2s_nofill.parquet
+
+package_pin:
+  tijuana_dispersion: v0.3.0
+
+seed: 42

@@ -17,6 +17,114 @@ Don't delete old entries. The log is the project's memory.
 
 ---
 
+## 2026-05-12 — autonomous-session summary (Phase A through v3.3)
+
+For convenience: this is a roll-up of everything the autonomous Claude
+Code session ran on 2026-05-11 / 2026-05-12 while @valentinedwv was on
+vacation. The individual entries below carry the detail.
+
+### State of the calibration on Apr 1-14 holdout
+
+| Variant | SAN YSIDRO | NESTOR-BES | IB CIVIC CTR |
+|---------|------:|------:|------:|
+| v3 (Mar 13-15 only, original report) | (n/a) | 0.60 | 0.62 |
+| v3 refit on broader windows (no NE sources)         | 0.041 | 0.201 | 0.091 |
+| v3.1 (2 NE candidates, relaxed bay cap, single-amp diel) | 0.114 | 0.211 | 0.086 |
+| v3.2 (12-NE-grid, single-amp diel) ← current best     | **0.200** | **0.242** | 0.087 |
+| v3.3 (spill-excluded, single-amp diel)                | 0.198 | 0.218 | 0.082 |
+
+SAN YSIDRO holdout fit improved 5× over the original v3 baseline.
+NESTOR-BES climbed by 0.04. IB CIVIC CTR is the remaining problem
+receptor (stuck at 0.087 regardless of every variant tried).
+
+### Things we now believe
+
+1. **There is a real source near (32.575, -117.040)** — directly north
+   of SAN YSIDRO in the Otay Mesa industrial area. The v3.2 grid sweep
+   spontaneously attributed 0.89 g/s to that cell, with 4.5 g/s total
+   across the NE grid. Worth physical ground-truthing.
+2. **A secondary source candidate near (32.610, -117.060)** on the
+   south edge of San Diego Bay also lights up at 0.87 g/s.
+3. **The bay archetype default cap (0.5 g/s) is too tight.** Otay River
+   Outlet readily wants 0.9 g/s in v2-style fits. Worth a service-repo
+   PR to raise the default to ~2.0.
+4. **The v2-era Mar 13-15 numbers were window-specific.** v2's
+   originally-reported r=0.60 (NESTOR) etc. were on a 72-hour
+   spill-event window. Refit on the broader Feb-Mar window v2's r is
+   0.39 / 0.15 / 0.27. Future calibration reports should default to
+   holdout windows.
+5. **Per-archetype-amplitude diel is a dead end.** Three experiments
+   show it doesn't beat single-amp diel on holdout. Land vs water
+   amplitude split is retired.
+6. **Spill exclusion is a dead end.** The Mar 13-15 spill carries
+   information that generalises to non-spill nocturnal regimes; v3.3
+   confirms excluding it hurts holdout fit (NESTOR drops 0.02-0.04).
+   The spill's signal got absorbed by *channel* sources, not Stewart's
+   Drain (the documented spill source).
+
+### Next-priority experiments (queued, not yet run)
+
+1. **IB CIVIC CTR diagnostic** — the receptor stuck at holdout r ~0.08
+   across every v3.x variant. A Phase-A-style sector decomposition for
+   IB. Likely highest-leverage remaining single experiment.
+2. **Refine NE grid** at 0.5 km spacing around (32.575, -117.040) and
+   (32.595, -117.040). Narrows the source location further.
+3. **Investigate channel-source rate inflation.** v3.3 showed channel
+   sources absorb 3 g/s; this is implausibly high for 12 distributed
+   "bridge / crossing" points. Either reduce the count or tighten
+   bounds.
+4. **Ground-truth (32.575, -117.040)** against SDAPCD industrial
+   inventory, cross-border emission reports, Otay Mesa zoning.
+5. Open issue: investigate physical sources colocated with NE hot
+   cells (separate research task).
+
+### Files added in this session
+
+- `experiments/2026-05-11_calibration_v3/` — initial diel experiment
+- `experiments/2026-05-11_sy_north_residual_diagnostic/` — Phase A
+- `experiments/2026-05-11_calibration_v3_1/` — per-arch diel + 2 NE
+- `experiments/2026-05-12_calibration_v3_2/` — 12-grid NE sweep
+- `experiments/2026-05-12_calibration_v3_3_spill_exclude/` — spill exclusion
+
+---
+
+## 2026-05-12 — calibration_v3.3 (spill exclusion, negative result)
+
+**Question**: Does excluding the documented Mar 13-15 spill from
+training give lower drain rates and better holdout generalisation?
+
+**Result**: No on both counts.
+- Drain rates are essentially unchanged (Stewart's Drain stays at
+  0.05-0.07 g/s; total drain rate 4.08 → 4.07). The hypothesis that
+  the spill inflated drains was wrong: NNLS never attributed the spill
+  to Stewart's Drain in the first place.
+- **Channel sources** absorbed the spill's signal instead — total
+  channel rate drops 3.02 → 1.81 g/s (−40%) when the spill is excluded.
+  Suggests the wind direction during the spill peak hours was not
+  consistent with Stewart's→NESTOR bearing, so NNLS spread the mass
+  upstream onto channel sources.
+- Holdout fit regresses across all three variants: NESTOR-BES r drops
+  0.02-0.04. SAN YSIDRO is essentially unchanged.
+
+**State change**:
+- The hypothesis "spill inflates drain rates" is rejected.
+- The Mar 13-15 spill carries information useful for non-spill
+  nocturnal regimes — its inclusion improves holdout. Counter-
+  intuitively, removing the most extreme event hurts generalisation.
+- The "spill archetype" idea (cap 20 g/s, event-windowed activation)
+  in the service repo's defaults is unmotivated by this evidence —
+  NNLS doesn't even attribute the actual documented spill to its
+  source.
+- Channel-source rate inflation is the more worrying finding. 3 g/s
+  across 12 distributed bridge/crossing points is implausibly high
+  for the underlying physics — these are tagged as channel sources
+  but their fitted rates approach drain magnitudes.
+
+**Next**: Stop chasing spill exclusion. Look at IB CIVIC CTR
+(stuck at r=0.08) and channel-source overfit instead.
+
+---
+
 ## 2026-05-12 — calibration_v3.2 (NE candidate grid sweep)
 
 **Question**: v3.1 added 2 fixed NE candidates (~1.8 g/s absorbed total)

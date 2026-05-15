@@ -6,7 +6,23 @@
             NESTOR event was predicted at ~1 ppb. Diagnoses *why*, and
             answers the river-source question.
 
-## 1. There was a large, real event — at NESTOR, not "Berry"
+## ⚠️ Receptor identity correction (2026-05-15)
+
+An earlier draft of this file claimed "Berry Elementary is not in our
+data." **That was wrong.** Per the project owner:
+
+> **`NESTOR - BES` = Berry Elementary School** (BES), in the Nestor
+> neighborhood of San Diego.
+
+So the May 10–11 spike analysed below — the 177 ppb event at
+"NESTOR-BES" — **is exactly the Berry Elementary event the user asked
+about.** Every finding here applies directly. Only the receptor
+*label* was misread; the analysis is valid. (Other receptors:
+`SAN YSIDRO` = San Ysidro monitor; `IB CIVIC CTR` = Imperial Beach
+Civic Center. This mapping is now recorded in the calibration log so
+future sessions don't repeat the confusion.)
+
+## 1. There was a large, real event — at Berry Elementary (NESTOR-BES)
 
 Observed H₂S, May 10 20:00 → May 11 05:00 (PT):
 
@@ -20,10 +36,10 @@ Observed H₂S, May 10 20:00 → May 11 05:00 (PT):
 | 05-11 03:00      | 36.8       | 0.0              | 1.3    | 0.7    |
 | 05-11 04:00      | 1.1        | 0.6              | 0.7    | 0.8    |
 
-A sharp 4-hour nocturnal spike at **NESTOR-BES** (peak 177 ppb),
-collapsing by 04:00. SAN YSIDRO and IB CIVIC CTR stayed low (≤ 5 ppb)
-throughout — this was a NESTOR-localised event. (No "Berry Elementary"
-monitor exists in our data; see README.)
+A sharp 4-hour nocturnal spike at **NESTOR-BES = Berry Elementary
+School** (peak 177 ppb), collapsing by 04:00. SAN YSIDRO and IB CIVIC
+CTR stayed low (≤ 5 ppb) throughout — this was a Berry-localised
+event. **This is the event the user reported.**
 
 Model skill on the May 9–12 window: NESTOR Pearson **0.019**,
 predicted max **22 ppb** vs observed **177 ppb**. During the spike the
@@ -86,13 +102,48 @@ single-station spike under 1.5 m/s wind that vanishes the moment wind
 picks up to 5+ m/s (04:00) is textbook nocturnal stagnation, and the
 river sources are right there to the SE.
 
+## 4. This generalises — Berry's extremes are stagnation, not advection
+
+The May 10–11 event is not a one-off. Across Berry's full record
+(2024-10 → 2026-05, 13,722 hours) there are **242 hours > 100 ppb**
+(1.76 %). Their character:
+
+- **97 % nocturnal** (20:00–07:59).
+- Median wind speed **2.4 m/s** (mean 2.6); **74 % occur under
+  3.5 m/s**, 53 % under 2.5 m/s.
+- **Wind direction is uniform across all 16 sectors** (9–19 events
+  each — no preferred direction at all).
+- All-time Berry max: **752 ppb** (2026-04-04 22:00).
+
+The flat wind-direction distribution is the decisive evidence. If
+extreme H₂S reached Berry by advection from a specific source, the
+events would cluster in the upwind sector(s) of that source. They
+don't — they're spread evenly. Combined with near-calm speeds and
+near-total nocturnality, **Berry's extreme regime is local
+stagnation / accumulation under a collapsed nocturnal boundary layer,
+not directional plume transport.**
+
+A steady-state Gaussian plume model is structurally the wrong tool for
+this regime: its concentration goes as 1/u (blows up / is undefined as
+u→0) and it *requires* a meaningful wind direction to route a plume —
+both assumptions fail under calm-night stagnation. This is why the
+model can have a respectable bulk/Spearman fit yet ~zero skill on the
+extremes: the moderate hours *are* advective and modelled fine; the
+extreme hours are a different physical process the model cannot
+represent in principle.
+
 ## What this means
 
-1. **The model has no skill on calm-night stagnation events** — and
-   these are exactly the highest-concentration, most health-relevant
-   episodes (98 % of extremes are nocturnal). The Apr-holdout Spearman
-   numbers (NESTOR 0.52) are driven by the well-behaved hours; the
-   model fails precisely when it matters most.
+1. **The model has no skill on calm-night stagnation events, and that
+   is structural, not a tuning gap.** All 242 of Berry's > 100 ppb
+   hours are the stagnation regime (97 % nocturnal, 74 % < 3.5 m/s,
+   wind direction uniform across all sectors). A steady-state Gaussian
+   plume cannot represent a no-preferred-direction near-calm
+   accumulation process (c ∝ 1/u is undefined as u→0). The Apr-holdout
+   Spearman (Berry 0.52) is carried by the advective moderate hours;
+   the model fails precisely on the extreme regime that matters most
+   for health — and no source-field or diel tuning fixes that, it
+   needs a different model class.
 2. **River sources are in the model and are the most likely physical
    culprit for this event** — but the Gaussian-plume + 10 m-wind
    formulation cannot route them to NESTOR under calm-night drainage
@@ -117,11 +168,10 @@ river sources are right there to the SE.
 3. **Do not over-invest in more source candidates** until the
    calm-night wind question is resolved — adding sources to fit a
    wind-direction artifact would be fitting noise.
-4. **Berry Elementary:** if it's an operational receptor of interest,
-   we need its coordinates and (ideally) a monitor feed. With them we
-   can add a virtual receptor — but note the model misses the
-   co-located NESTOR event by 99 %, so any Berry prediction during
-   such events would be unreliable until (1)/(2) are addressed.
+4. **Berry Elementary IS `NESTOR - BES`** — it is already a
+   first-class receptor, not a gap. The actionable point is that the
+   model misses Berry's calm-night events by ~99 %; fixing that is
+   items (1)/(2), not adding a receptor.
 
 ## Limitations / caveats
 

@@ -15,6 +15,21 @@ Format for each entry:
 
 Don't delete old entries. The log is the project's memory.
 
+## Receptor identity (READ THIS — confirmed 2026-05-15)
+
+The H₂S monitor `site_name` codes are not self-explanatory. Mapping:
+
+| `site_name`    | What it actually is                         |
+|----------------|---------------------------------------------|
+| `NESTOR - BES` | **Berry Elementary School** (Nestor nbhd, San Diego) |
+| `SAN YSIDRO`   | San Ysidro monitor                          |
+| `IB CIVIC CTR` | Imperial Beach Civic Center                 |
+
+`BES` = Berry Elementary School. If a stakeholder asks about "Berry
+Elementary," they mean `NESTOR - BES`. (A 2026-05-12 analysis briefly
+mis-concluded Berry was absent from the data after a naive substring
+search — it is in fact our primary, best-fit receptor.)
+
 ---
 
 ## 2026-05-12 — may1011_event_analysis (model misses a real 177 ppb event)
@@ -23,12 +38,14 @@ Don't delete old entries. The log is the project's memory.
 Elementary"). Do our predictions capture it? Are the river sources
 included?
 
-**Scope note**: "Berry Elementary" is **not** in any of our data —
-only 3 monitors exist (IB CIVIC CTR, NESTOR-BES, SAN YSIDRO); not in
-sensors.json; the only "berry" in complaints is "Mulberry Dr" in San
-Marcos (false match). No Berry observations exist to score against.
+**Identity correction (2026-05-15)**: `NESTOR - BES` **IS Berry
+Elementary School**. An earlier draft of this entry wrongly said Berry
+was absent from the data (naive substring search hit "Mulberry Dr" in
+San Marcos). Berry is our primary receptor; the analysis below is
+exactly the answer to the user's question — only the label was misread.
 
-**Result**: There was a large real event — at **NESTOR-BES**: a sharp
+**Result**: There was a large real event at **Berry Elementary
+(NESTOR-BES)**: a sharp
 4-hour nocturnal spike, 171→177→171→156 ppb at 23:00 May 10 → 02:00
 May 11, collapsing by 04:00. SY and IB stayed ≤ 5 ppb. The model
 **misses it entirely**: predicted ≈ 1 ppb against 171–177 observed
@@ -43,11 +60,24 @@ channel source (126–239°) and every drain source (134–212°) sits
 in the upwind arc. Only ~1.3 g/s (some estuary + the 2 bay ponds) is
 geometrically able to reach NESTOR, yielding ~1–4 ppb.
 
+**Generalised** (not a one-off): across Berry's full record there are
+242 hours > 100 ppb — 97 % nocturnal, median wind 2.4 m/s, 74 % under
+3.5 m/s, and **wind direction uniform across all 16 sectors**. Flat
+direction + near-calm + nocturnal = stagnation/accumulation, NOT
+directional advection. (All-time Berry max 752 ppb, 2026-04-04.)
+
 **State change**:
-- The model has **no skill on calm-night stagnation events** — exactly
-  the highest, most health-relevant episodes. Apr-holdout Spearman
-  (NESTOR 0.52) reflects well-behaved hours; the model fails when it
-  matters most.
+- The model has **no skill on calm-night stagnation events, and this
+  is structural**. A steady-state Gaussian plume (c ∝ 1/u, requires a
+  meaningful wind direction) cannot represent a no-preferred-direction
+  near-calm nocturnal accumulation process. The extreme regime — the
+  one that matters most for health — is a different physical process
+  than the model class can represent. Apr-holdout Spearman (Berry
+  0.52) is carried by the advective moderate hours only. No
+  source-field / diel / wind tuning fixes this; it needs a different
+  model (box/accumulation conditioned on stability + mixing height),
+  or the service must explicitly scope itself to non-stagnation
+  conditions and flag calm nocturnal hours as out-of-envelope.
 - Two explanations, (b) the more likely primary:
   (a) an unmodeled source WNW–NNW of NESTOR (coast / estuary mouth /
   South Bay), or
@@ -72,9 +102,9 @@ geometrically able to reach NESTOR, yielding ~1–4 ppb.
    open question — collapsed boundary layer amplifies ground conc 5–10×).
 3. Hold off on more source candidates until the wind question is
    resolved (would fit a wind artifact).
-4. Berry Elementary: needs coordinates + ideally a monitor feed to
-   evaluate; until calm-night handling improves, predictions there
-   during such events would be unreliable.
+4. Berry Elementary = NESTOR-BES is already our primary receptor; no
+   new monitor needed. The actionable gap is that the model misses
+   Berry's calm-night events ~99% — addressed by items 1–2 above.
 
 ---
 

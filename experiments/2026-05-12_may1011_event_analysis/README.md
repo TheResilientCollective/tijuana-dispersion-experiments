@@ -14,18 +14,22 @@ are included.
    the event?
 3. (User-named) "Berry Elementary" — can we evaluate predictions there?
 
-## Important data-scope finding
+## Receptor identity (corrected 2026-05-15)
 
-**"Berry Elementary" is not in any of our data.** The H₂S parquet has
-exactly three monitoring sites — IB CIVIC CTR, NESTOR-BES, SAN YSIDRO —
-and Berry is not in `sensors.json`. The only "berry" strings in
-`complaints.parquet` are "Mul**berry** Dr" in San Marcos (lat 33.14,
-~65 km north — unrelated false matches). So we have **no observations
-at Berry Elementary** and cannot directly score predictions there. We
-*can* report the event at the three real stations, and could add a
-virtual Berry receptor if its coordinates are supplied (caveat: see
-RESULTS — the model misses this event by ~99% even where we *do* have
-obs, so a Berry prediction would be unreliable anyway).
+**`NESTOR - BES` IS Berry Elementary School** (BES), in the Nestor
+neighborhood of San Diego — confirmed by the project owner. An earlier
+draft wrongly concluded "Berry is not in our data" after a substring
+search; in fact Berry is one of our three core monitors. The
+substring `berry` in `complaints.parquet` ("Mul**berry** Dr", San
+Marcos, lat 33.14) is an unrelated false match and is *not* what the
+user meant. Receptor map:
+
+- `NESTOR - BES` → **Berry Elementary School** (Nestor, San Diego)
+- `SAN YSIDRO`   → San Ysidro monitor
+- `IB CIVIC CTR` → Imperial Beach Civic Center
+
+The May 10–11 event analysed here is therefore **exactly** the Berry
+Elementary event the user reported. Findings apply directly.
 
 ## Approach
 

@@ -40,8 +40,8 @@ datasets:
 
   - name: complaints
     description: County resident odor complaint records with location and timing.
-    url: https://oss.resilientservice.mooo.com/resilentpublic/latest/tijuana/complaints.parquet
-    fallback_url: https://oss.resilientservice.mooo.com/resilentpublic/latest/tijuana/complaints.csv
+    url: https://oss.resilientservice.mooo.com/resilentpublic/latest/tijuana/sd_complaints/complaints.parquet
+    fallback_url: https://oss.resilientservice.mooo.com/resilentpublic/latest/tijuana/sd_complaints/complaints.csv
     target_path: data/complaints.parquet
     expected_size_mb: 2
     sha256: pending
@@ -50,7 +50,7 @@ datasets:
 
   - name: emission_sources
     description: Static metadata for 17 named H₂S emission source locations.
-    url: https://oss.resilientservice.mooo.com/resilentpublic/latest/tijuana/emission_sources.json
+    url: https://oss.resilientservice.mooo.com/resilentpublic/latest/tijuana/location/emissions_sources.json
     target_path: data/emission_sources.json
     expected_size_mb: 0.01
     sha256: pending
@@ -58,8 +58,8 @@ datasets:
 
   - name: sensors
     description: Static metadata for the three SDAPCD monitoring stations.
-    url: https://oss.resilientservice.mooo.com/resilentpublic/latest/tijuana/sensors.json
+    url: https://oss.resilientservice.mooo.com/resilentpublic/latest/tijuana/location/sensors.json
     target_path: data/sensors.json
-    expected_size_mb: 0.01
+    expected_size_mb: 0.005
     sha256: pending
     strict: false

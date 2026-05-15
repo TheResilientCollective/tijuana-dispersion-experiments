@@ -18,6 +18,7 @@ dependencies = [
 
     # orchestration
     "dagster>=1.7,<2.0",
+    "dagster-dg-cli>=1.7,<2.0",
     "dagster-webserver>=1.7,<2.0",
     "dagster-k8s>=0.23,<1.0",
     "dagster-aws>=0.23,<1.0",        # S3Resource + S3PickleIOManager
@@ -105,3 +106,13 @@ strict = true        # the one part of this repo that follows service-grade rule
 [tool.pytest.ini_options]
 testpaths = ["tests", "emissions_research"]
 addopts = "-ra"
+
+[tool.dg]
+
+# ("project", required) Marks this as a Dagster project.
+directory_type = "project"
+
+[tool.dg.project]
+
+# (string, required) Specifies the root module of the project.
+root_module = "nrp" # this is required

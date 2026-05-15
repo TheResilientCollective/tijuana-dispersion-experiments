@@ -1,0 +1,63 @@
+# Dagster instance config for NRP (k8s.nrp-nautilus.io).
+# DAGSTER_HOME must point to the directory containing this file.
+#
+# Run launcher: K8sRunLauncher submits each Dagster run as a K8s Job.
+# Executor: k8s_job_executor (configured in dagster_pipeline.py) submits
+#           each op/asset step as a separate K8s Job within the run.
+#
+# Storage: PostgreSQL is required for multi-replica Dagster on K8s.
+# Set DAGSTER_PG_* env vars in the Dagster daemon/webserver deployment.
+
+run_launcher:
+  module: dagster_k8s
+  class: K8sRunLauncher
+  config:
+    load_incluster_config: true
+    job_namespace:
+      env: NRP_NAMESPACE
+    service_account_name: dagster-nrp
+    image_pull_policy: IfNotPresent
+    # Image is injected at launch time by the Dagster daemon from the
+    # code-location image tag (set via --image or the workspace image field).
+    job_image:
+      env: DAGSTER_IMAGE
+    # Pull AWS credentials from the same secret the job_template.yaml uses.
+    env_secrets:
+      - object-store-credentials
+    # Resource requests/limits for the run coordinator pod (not step pods —
+    # step pods inherit from op_tags in dagster_pipeline.py).
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "1"
+        memory: "1Gi"
+
+storage:
+  postgres:
+    postgres_db:
+      username:
+        env: DAGSTER_PG_USER
+      password:
+        env: DAGSTER_PG_PASSWORD
+      hostname:
+        env: DAGSTER_PG_HOST
+      db_name:
+        env: DAGSTER_PG_DB
+      port: 5432
+
+compute_logs:
+  module: dagster_aws.s3.compute_log_manager
+  class: S3ComputeLogManager
+  config:
+    bucket:
+      env: DAGSTER_S3_BUCKET
+    prefix: dagster/compute_logs
+    endpoint_url:
+      env: S3_ENDPOINT_URL
+    region_name:
+      env: AWS_DEFAULT_REGION
+
+telemetry:
+  enabled: false

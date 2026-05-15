@@ -37,12 +37,12 @@ Read the dagster-expert skill before extending. Especially: "partitioned
 assets," "io_manager," "resources," "sensors."
 """
 
-from __future__ import annotations
-
 import logging
+import os
 from typing import Any
 
 import dagster as dg
+from dagster import AssetExecutionContext, RunFailureSensorContext, RunStatusSensorContext
 from dagster_aws.s3 import S3PickleIOManager, S3Resource
 from dagster_k8s import k8s_job_executor
 
@@ -108,7 +108,7 @@ _AGGREGATOR_K8S_TAGS = {
     io_manager_key="s3_io",
     required_resource_keys={"s3"},
 )
-def sobol_chunk_results(context: dg.AssetExecutionContext) -> dict[str, Any]:
+def sobol_chunk_results(context: AssetExecutionContext) -> dict[str, Any]:
     """One chunk of Sobol samples, ~1,000 forward-model evaluations.
 
     The IO manager (`s3_io`) handles persistence — return value lands at
@@ -136,7 +136,7 @@ def sobol_chunk_results(context: dg.AssetExecutionContext) -> dict[str, Any]:
     io_manager_key="s3_io",
     required_resource_keys={"s3", "slack"},
 )
-def sobol_aggregate(context: dg.AssetExecutionContext) -> dict[str, Any]:
+def sobol_aggregate(context: AssetExecutionContext) -> dict[str, Any]:
     """Combine all Sobol chunk parquets and compute first-order + total Sobol indices.
 
     Reads every partition of sobol_chunk_results from S3, concatenates,
@@ -173,7 +173,7 @@ def sobol_aggregate(context: dg.AssetExecutionContext) -> dict[str, Any]:
     io_manager_key="s3_io",
     required_resource_keys={"s3"},
 )
-def mcmc_chain_results(context: dg.AssetExecutionContext) -> dict[str, Any]:
+def mcmc_chain_results(context: AssetExecutionContext) -> dict[str, Any]:
     raise NotImplementedError("MCMC chain not yet implemented.")
 
 
@@ -184,7 +184,7 @@ def mcmc_chain_results(context: dg.AssetExecutionContext) -> dict[str, Any]:
     io_manager_key="s3_io",
     required_resource_keys={"s3", "slack"},
 )
-def mcmc_aggregate(context: dg.AssetExecutionContext) -> dict[str, Any]:
+def mcmc_aggregate(context: AssetExecutionContext) -> dict[str, Any]:
     raise NotImplementedError("MCMC aggregator not yet implemented.")
 
 
@@ -200,7 +200,7 @@ def mcmc_aggregate(context: dg.AssetExecutionContext) -> dict[str, Any]:
     io_manager_key="s3_io",
     required_resource_keys={"s3"},
 )
-def cv_fold_results(context: dg.AssetExecutionContext) -> dict[str, Any]:
+def cv_fold_results(context: AssetExecutionContext) -> dict[str, Any]:
     raise NotImplementedError("CV fold not yet implemented.")
 
 
@@ -211,7 +211,7 @@ def cv_fold_results(context: dg.AssetExecutionContext) -> dict[str, Any]:
     io_manager_key="s3_io",
     required_resource_keys={"s3", "slack"},
 )
-def cv_aggregate(context: dg.AssetExecutionContext) -> dict[str, Any]:
+def cv_aggregate(context: AssetExecutionContext) -> dict[str, Any]:
     raise NotImplementedError("CV aggregator not yet implemented.")
 
 
@@ -225,16 +225,18 @@ def cv_aggregate(context: dg.AssetExecutionContext) -> dict[str, Any]:
     name="nrp_run_failure_to_slack",
     description="Sends critical-tier Slack message on K8s job failure.",
 )
-def nrp_run_failure_to_slack(context: dg.RunFailureSensorContext) -> None:
+def nrp_run_failure_to_slack(context: RunFailureSensorContext) -> None:
     """Critical-tier alert — K8s pod failed and didn't recover via retry."""
     slack: SlackWebhookResource = context.resources.slack
     run = context.dagster_run
-    error = context.failure_event.event_specific_data
+    event_data = context.failure_event.event_specific_data
+    error_obj = getattr(event_data, "error", None)
+    error_msg = error_obj.message if error_obj else "unknown"
     slack.critical(
         f":rotating_light: NRP run failed\n"
         f"Job: {run.job_name}\n"
         f"Run ID: {run.run_id[:8]}\n"
-        f"Error: {error.error.message if error and error.error else 'unknown'}\n"
+        f"Error: {error_msg}\n"
         f"Dagster UI: <see Dagster instance>"
     )
 
@@ -246,7 +248,7 @@ def nrp_run_failure_to_slack(context: dg.RunFailureSensorContext) -> None:
     description="Sends watch-tier Slack message when an NRP run starts.",
     minimum_interval_seconds=30,
 )
-def nrp_run_start_to_slack(context: dg.RunStatusSensorContext) -> None:
+def nrp_run_start_to_slack(context: RunStatusSensorContext) -> None:
     """Watch-tier announcement — informational only."""
     slack: SlackWebhookResource = context.resources.slack
     run = context.dagster_run
@@ -278,34 +280,43 @@ defs = dg.Definitions(
         # S3 client. Configure endpoint_url for non-AWS S3-compatible stores
         # (the project's existing oss.resilientservice.mooo.com works this way).
         "s3": S3Resource(
-            aws_access_key_id={"env": "AWS_ACCESS_KEY_ID"},
-            aws_secret_access_key={"env": "AWS_SECRET_ACCESS_KEY"},
-            endpoint_url={"env": "S3_ENDPOINT_URL"},
-            region_name={"env": "AWS_DEFAULT_REGION"},
+            aws_access_key_id=dg.EnvVar("AWS_ACCESS_KEY_ID"),
+            aws_secret_access_key=dg.EnvVar("AWS_SECRET_ACCESS_KEY"),
+            endpoint_url=dg.EnvVar("S3_ENDPOINT_URL"),
+            region_name=dg.EnvVar("AWS_DEFAULT_REGION"),
         ),
         # IO manager for asset persistence — all assets with `io_manager_key="s3_io"`
         # automatically read/write through this.
         "s3_io": S3PickleIOManager(
             s3_resource=S3Resource(
-                aws_access_key_id={"env": "AWS_ACCESS_KEY_ID"},
-                aws_secret_access_key={"env": "AWS_SECRET_ACCESS_KEY"},
-                endpoint_url={"env": "S3_ENDPOINT_URL"},
+                aws_access_key_id=dg.EnvVar("AWS_ACCESS_KEY_ID"),
+                aws_secret_access_key=dg.EnvVar("AWS_SECRET_ACCESS_KEY"),
+                endpoint_url=dg.EnvVar("S3_ENDPOINT_URL"),
             ),
-            s3_bucket={"env": "DAGSTER_S3_BUCKET"},
+            s3_bucket=dg.EnvVar("DAGSTER_S3_BUCKET"),
             s3_prefix="dagster/runs",
         ),
         # Slack webhook sender. Reuses the same env vars as the existing alert system.
         "slack": SlackWebhookResource(
-            watch_webhook_url={"env": "SLACK_WEBHOOK_WATCH"},
-            critical_webhook_url={"env": "SLACK_WEBHOOK_CRITICAL"},
+            watch_webhook_url=dg.EnvVar("SLACK_WEBHOOK_WATCH"),
+            critical_webhook_url=dg.EnvVar("SLACK_WEBHOOK_CRITICAL"),
         ),
     },
+    # Use K8s step executor when KUBERNETES_SERVICE_HOST is set (in-cluster or
+    # local dev pointing at NRP via kubeconfig). load_incluster_config is True
+    # only inside a real pod (SA token present); locally it falls back to
+    # ~/.kube/config so `kubectl` context determines the target cluster.
     executor=k8s_job_executor.configured(
         {
             "job_namespace": {"env": "NRP_NAMESPACE"},
             "image_pull_policy": "IfNotPresent",
             "service_account_name": "dagster-nrp",
             "max_concurrent": 100,
+            "load_incluster_config": os.path.exists(
+                "/var/run/secrets/kubernetes.io/serviceaccount/token"
+            ),
         }
-    ),
+    )
+    if os.getenv("KUBERNETES_SERVICE_HOST")
+    else dg.multiprocess_executor,
 )

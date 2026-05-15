@@ -17,6 +17,63 @@ Don't delete old entries. The log is the project's memory.
 
 ---
 
+## 2026-05-12 — calibration_v3.5 (SY near-field arc) + SY ordering diagnostic
+
+**Question**: ib_metric_reframe identified SAN YSIDRO (not IB) as the
+real problem receptor (Spearman ~0.16 vs IB/NESTOR ~0.47-0.50). Is SY's
+weak rank-order fit a missing near-field source (local / cross-border),
+fixable by adding candidate sources around SY?
+
+**Result**: Hypothesis rejected, but clarifying.
+
+SY ordering diagnostic first established:
+- The model under-predicts SY ~3× everywhere (obs mean 6.9 vs pred 2.2).
+- Zero spike skill: SY top-decile Pearson −0.07, Spearman 0.02.
+- The model predicts ≈0 in 27% of holdout hours where SY observes a
+  2.5-7 ppb floor. SY's biggest uncovered regime is W/WNW wind
+  (~98 hrs @ ~7 ppb; nearest modeled source 6.3 km away).
+- SY-local wind diverges from NESTOR only ~7% of hours (median Δ 8°),
+  so the "wrong wind" lever is weak.
+
+v3.5 then added a 5-source near-field arc around SY (≥1.4 km, W/NW/N/E/S
+covering the uncovered directions), single-amp diel:
+- SY near-field absorbs only **0.19 g/s total** vs the v3.2 NE grid's
+  2.48 g/s. `syW` (placed in SY's biggest uncovered regime) fits to
+  **exactly zero**. NNLS demonstrably funds candidate sources when the
+  data supports them (NE grid in v3.2) — it declined here.
+- SY Spearman 0.165 → 0.182 (+0.018, small; likely extra DoF not a
+  real source). NESTOR 0.498 → 0.525 (+0.028, genuine small gain).
+  IB 0.469 → 0.473. Overfitting guard passes (nothing regressed).
+
+**State change**:
+- **SY's weakness is a representativeness limit, not a missing point
+  source.** The persistent omnidirectional 2.5-7 ppb floor cannot be
+  produced by any upwind point; it needs an area/background term or is
+  unresolvable by a 3-receptor Gaussian-plume model at ~1 km near a
+  complex urban border environment. Two independent source-addition
+  experiments (v3.2 NE grid, v3.5 near-field arc) failed to lift SY
+  ordering while readily lifting NESTOR's — consistent and conclusive.
+- **NESTOR is the well-resolved receptor** (Spearman 0.525,
+  log-Pearson 0.49). The project's success claims should be framed
+  around NESTOR; SY/IB reported as met/representativeness-limited.
+- **v3.5 is the marginal best overall config.** Keep it. Further
+  point-source tinkering on the v3 line has hit diminishing returns.
+- Improving SY is a *data* problem (co-located anemometer + area
+  background / higher-res met), not a calibration problem.
+
+**Next**:
+1. Service-repo PR: make Spearman + log-Pearson first-class in the
+   reported fit diagnostics (currently Pearson-only). Highest-value
+   remaining work — it makes future runs report the metric that
+   matters.
+2. Stop point-source experiments on the v3 line (diminishing returns).
+3. If SY matters operationally: instrumentation ask (SY anemometer /
+   local background), not a model tweak.
+4. experiments-repo issue #2 (Sobol sensitivity on NRP) for a formal
+   parameter-sensitivity ranking — blocked on NRP infra.
+
+---
+
 ## 2026-05-12 — ib_metric_reframe (IB diagnostic → project-wide metric change)
 
 **Question**: IB CIVIC CTR's holdout Pearson r was stuck at ~0.087

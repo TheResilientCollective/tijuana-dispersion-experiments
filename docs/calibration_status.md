@@ -17,6 +17,58 @@ Don't delete old entries. The log is the project's memory.
 
 ---
 
+## 2026-05-12 — ib_metric_reframe (IB diagnostic → project-wide metric change)
+
+**Question**: IB CIVIC CTR's holdout Pearson r was stuck at ~0.087
+across every v3.x variant. Is the model failing on IB, or is the
+metric wrong?
+
+**Result**: The metric was wrong. Three things established:
+
+1. **IB has no independent meteorology.** Its wind columns in
+   `modeldata_h2s_nofill.parquet` are byte-identical to NESTOR's
+   (corr=1.000). SAN YSIDRO has its own wind; IB does not. IB also
+   *leads* NESTOR by ~1 h. Both are uncorrectable data limitations.
+
+2. **IB is heavy-tailed (median 0.5, max 130 ppb); top 3 hours = 40%
+   of sum-of-squares.** Pearson r on this series is decided by ~3
+   points and is not a goodness measure.
+
+3. **Under Spearman the model is fine on IB and the whole v3 line was
+   under-reported.** v3.2 holdout: IB Pearson 0.087 vs **Spearman
+   0.466** (≈ NESTOR's 0.498). Across the line, IB Spearman climbs
+   0.34 (v3.0) → 0.47 (v3.2) while IB Pearson stays flat ~0.08.
+   NESTOR Spearman doubles 0.24 → 0.50 while its Pearson barely moves.
+   **The v3.2 NE-grid breakthrough was real and large; Pearson hid it.**
+
+**State change** (this reorders project priorities):
+- **Spearman becomes the headline calibration metric** for episodic
+  H₂S fits; Pearson + log-Pearson secondary. Report all three —
+  ordering is receptor-dependent (Pearson flatters SY, deflates
+  IB/NESTOR).
+- **IB is no longer the problem receptor.** It's met-limited and the
+  model already captures its ordering (~0.47 Spearman). Stop chasing
+  IB.
+- **SAN YSIDRO is the real problem receptor.** It is the only receptor
+  where Pearson (0.20) > Spearman (0.16); its Spearman ~0.16 is far
+  below IB/NESTOR (~0.47-0.50). v3.2 raised SY *magnitude* (Pearson)
+  but not *ordering* (Spearman). That is the open problem.
+- Every prior v3.x RESULTS.md verdict was Pearson-pessimistic. The
+  canonical cross-variant scoreboard is now
+  `experiments/2026-05-12_ib_metric_reframe/output/metric_comparison.csv`.
+
+**Next**:
+1. Restate the project success metric (small service-repo PR: add
+   Spearman + log-Pearson to the reported fit diagnostics, currently
+   Pearson-only).
+2. SAN YSIDRO ordering investigation — why did v3.2 lift SY Pearson
+   but not Spearman? Phase-A-style cut on SY's *non-spike* hours.
+3. Backfill Spearman into the project's reporting / docs.
+4. Ask the data provider whether a real IB-local anemometer feed
+   exists (would raise the IB ceiling above the NESTOR-proxy limit).
+
+---
+
 ## 2026-05-12 — autonomous-session summary (Phase A through v3.3)
 
 For convenience: this is a roll-up of everything the autonomous Claude

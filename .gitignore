@@ -57,3 +57,6 @@ tmp_dagster_*/
 *.swp
 .DS_Store
 Thumbs.db
+
+# Dagster local runtime state (NRP local dev) — never committed
+dagster_home/

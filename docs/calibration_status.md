@@ -32,6 +32,56 @@ search — it is in fact our primary, best-fit receptor.)
 
 ---
 
+## 2026-05-12 — calibration_v3.6 (nocturnal mixing-lid, Tier-1) — rejected, decisive
+
+**Question**: does a limited-mixing Gaussian lid (trap emissions under
+a collapsed nocturnal boundary layer) recover Berry's calm-night
+extreme regime?
+
+**Result**: No, and the failure mode is the key finding. Lid
+implemented as a per-(t,r,s) multiplicative factor on the unbounded
+footprint (stays linear → reuses NNLS), `L(t)=clip(k_L·max(u,.5)·s(stab),
+30,2000)`, `k_L` fitted with single-amp diel.
+- Holdout Spearman: baseline (no lid) SY 0.182 / Berry 0.525 / IB
+  0.473 → v3.6 (lid) 0.172 / 0.504 / 0.457. Uniformly slightly worse.
+- `k_L` fitted to the weak-lid end (165) — the optimizer correctly
+  reports the lid only does harm (amplifies quiet advective nights)
+  with no compensating gain.
+- Calm-night-extreme submetric @Berry (night & wind<3.5 & obs>50):
+  obs ~179 ppb, baseline pred ~9.4, v3.6 ~9.3. No effect.
+
+**State change** (this closes the plume-model line):
+- A mixing lid scales the *advected* footprint. During Berry's
+  flat-direction calm extremes the river sources are downwind →
+  unbounded footprint ≈ 0 at Berry → max(1,…)·0 = 0. **You cannot
+  trap a plume that never arrived.** Any footprint-scaling correction
+  (diel v3, per-arch diel v3.1, more sources v3.2/v3.5, lid v3.6) is
+  structurally incapable of the stagnation regime. Six experiments now
+  converge on this wall.
+- **Tier-2 box/accumulation model is necessary, not optional.** It
+  needs a source term with no upwind advective path:
+  `C[t]=C[t-1]·e^(-Δt/τ)+(E_local/(A·H_mix))·τ·(1-e^(-Δt/τ))` for
+  `u<u_calm`, with a regime classifier handing off to the Gaussian
+  when advection resumes. This is a new model CLASS → a service-repo
+  `stagnation_box` backend (the backend protocol already exists), a
+  design+PR effort, not another experiments-repo footprint tweak.
+- **The v3 plume line has reached its ceiling.** Best config = v3.5
+  (Berry Spearman 0.525 on the advective bulk). No further plume-side
+  experiment will move the extreme regime.
+
+**Next**:
+1. Stop plume-side experiments (v3→v3.6 all agree).
+2. Service-repo: scope a `stagnation_box` backend + a regime
+   classifier; validate on the 242 Berry >100 ppb hours.
+3. Service-repo issue (safety): until the box backend exists, the
+   service should flag calm nocturnal hours as out-of-envelope rather
+   than emit a confident low number when truth can be 150–750 ppb.
+4. Calm-night wind reanalysis (NERR/TJRTLMET vs Open-Meteo) still
+   worth doing — informs the box ventilation term + classifier
+   threshold.
+
+---
+
 ## 2026-05-12 — may1011_event_analysis (model misses a real 177 ppb event)
 
 **Question** (user-triggered): high H₂S was reported May 10–11 ("Berry

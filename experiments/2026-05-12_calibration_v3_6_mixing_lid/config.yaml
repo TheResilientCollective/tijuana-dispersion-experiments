@@ -1,0 +1,131 @@
+# calibration v3.5 — SAN YSIDRO near-field candidate arc
+#
+# The ib_metric_reframe experiment showed SY (not IB) is the real
+# problem receptor: under Spearman it sits at ~0.16 while IB/NESTOR
+# are ~0.47-0.50. The SY ordering diagnostic (this experiment's
+# run-cell history / README) found:
+#   - the model under-predicts SY ~3x everywhere
+#   - zero spike skill on SY's top decile
+#   - the model predicts ~0 in 27% of holdout hours where SY actually
+#     observes a 2.5-7 ppb floor
+#   - SY's biggest *uncovered* regime is W/WNW wind (~98 hrs @ ~7 ppb)
+#     where the nearest modeled source is 6.3 km away
+#
+# SY is ~1.2 km from the US-Mexico border with Tijuana urban/industrial
+# immediately south. Hypothesis: there is a near-field source (local /
+# cross-border) within ~1.5-3 km of SY that the river-valley source
+# field fundamentally lacks. v3.5 adds a defensible arc of candidates
+# W -> N -> E of SY (the uncovered directions), at >= 1.5 km so NNLS
+# can't trivially "cheat" by parking a source on the receptor.
+#
+# Overfitting guard: success requires SY Spearman up WITHOUT NESTOR or
+# IB Spearman regressing > 0.03 (a near-SY source must not help the
+# other receptors; if it does, it's absorbing systematic error).
+
+experiment:
+  name: calibration_v3_6_mixing_lid
+  date: 2026-05-12
+  description: |
+    v3.5 source field + single-amp diel PLUS a nocturnal mixing-lid
+    (limited-mixing Gaussian). A reflecting lid at height L(t) traps
+    emissions in a shallow stable boundary layer on calm clear nights;
+    ground concentration cannot fall below the well-mixed value
+    Q/(sqrt(2pi) u sy L). The lid is a per-(t,r,s) multiplicative
+    factor on the footprint -> stays LINEAR in emission rate, so it
+    drops straight into the existing bounded-NNLS machinery.
+    L(t) = clip(k_L * max(u,0.5) * s(stability), L_min, L_max),
+    s = {A:2.5,B:2.0,C:1.5,D:1.0,E:0.5,F:0.3}; k_L fitted in the
+    outer loop alongside diel amp/phase. Original v3.5 description:
+    v3.2 source field (12-cell NE grid + relaxed bay) PLUS a near-field
+    candidate arc around SAN YSIDRO covering the W/WNW/NW/N/E sectors
+    that currently have no upwind source. Single-amp diel (canonical
+    form; per-archetype retired after v3.1/v3.2). Headline metric is
+    Spearman per the metric-reframe decision.
+
+windows:
+  train:
+    start: "2026-02-01T00:00:00"
+    end:   "2026-04-01T00:00:00"
+  holdout:
+    start: "2026-04-01T00:00:00"
+    end:   "2026-04-15T00:00:00"
+  quick:
+    start: "2026-03-13T00:00:00"
+    end:   "2026-03-16T00:00:00"
+
+receptors:
+  - SAN YSIDRO
+  - NESTOR - BES
+  - IB CIVIC CTR
+
+sources:
+  channel:
+    n_sources: 12
+    start_lat: 32.54064
+    start_lon: -117.05801
+    end_lat: 32.555
+    end_lon: -117.115
+    seed_rate_g_s: 0.1
+  estuary_grid:
+    nx: 3
+    ny: 3
+    bbox: [32.555, -117.135, 32.580, -117.115]
+    seed_rate_g_s: 0.1
+  # v3.2's NE grid (kept) — proven to lift NESTOR + SY magnitude.
+  northeast_candidates:
+    - { name: "ne00", lat: 32.555, lon: -117.060, seed_rate_g_s: 0.2 }
+    - { name: "ne01", lat: 32.555, lon: -117.040, seed_rate_g_s: 0.2 }
+    - { name: "ne02", lat: 32.555, lon: -117.020, seed_rate_g_s: 0.2 }
+    - { name: "ne10", lat: 32.575, lon: -117.060, seed_rate_g_s: 0.2 }
+    - { name: "ne11", lat: 32.575, lon: -117.040, seed_rate_g_s: 0.2 }
+    - { name: "ne12", lat: 32.575, lon: -117.020, seed_rate_g_s: 0.2 }
+    - { name: "ne20", lat: 32.595, lon: -117.060, seed_rate_g_s: 0.2 }
+    - { name: "ne21", lat: 32.595, lon: -117.040, seed_rate_g_s: 0.2 }
+    - { name: "ne22", lat: 32.595, lon: -117.020, seed_rate_g_s: 0.2 }
+    - { name: "ne30", lat: 32.610, lon: -117.060, seed_rate_g_s: 0.2 }
+    - { name: "ne31", lat: 32.610, lon: -117.040, seed_rate_g_s: 0.2 }
+    - { name: "ne32", lat: 32.610, lon: -117.020, seed_rate_g_s: 0.2 }
+  # NEW in v3.5: SY near-field arc. Covers the uncovered upwind
+  # directions. All >= 1.5 km from SY (32.5528, -117.0473).
+  sy_nearfield_candidates:
+    - { name: "syW",   lat: 32.5528, lon: -117.0680, seed_rate_g_s: 0.2 }  # ~2.0 km W  (W/WNW wind)
+    - { name: "syWNW", lat: 32.5600, lon: -117.0640, seed_rate_g_s: 0.2 }  # ~2.0 km WNW
+    - { name: "syNW",  lat: 32.5670, lon: -117.0590, seed_rate_g_s: 0.2 }  # ~2.2 km NW
+    - { name: "syE",   lat: 32.5528, lon: -117.0300, seed_rate_g_s: 0.2 }  # ~1.6 km E  (E sector)
+    - { name: "syS",   lat: 32.5400, lon: -117.0473, seed_rate_g_s: 0.2 }  # ~1.4 km S  (border/Tijuana, S/SSW wind)
+
+archetype_overrides:
+  bounds:
+    bay: 5.0
+    northeast: 2.0
+    sy_nearfield: 2.0
+  priors:
+    northeast: 0.3
+    sy_nearfield: 0.3
+
+calibration:
+  prior_lambda: 0.5
+  smoothness_lambda: 0.3
+  outer:
+    diel_amplitude_land:  { initial: 1.5, bounds: [1.0, 3.5] }
+    diel_amplitude_water: { initial: 1.5, bounds: [1.0, 3.5] }
+    diel_phase_hours:     { initial: 4.0, bounds: [0.0, 24.0] }
+    # Mixing-lid scale (m per m/s). L = clip(k_L*max(u,0.5)*s(stab), L_min, L_max).
+    # Lower k_L -> shallower lid -> stronger calm-night amplification.
+    mixing_k_L:           { initial: 80.0, bounds: [10.0, 400.0] }
+    method: Nelder-Mead
+    maxiter: 400
+    xatol: 0.05
+    fatol: 1.0e-3
+  mixing:
+    L_min_m: 30.0      # physical floor on the nocturnal stable boundary layer
+    L_max_m: 2000.0    # daytime/convective cap
+    stability_scale: { A: 2.5, B: 2.0, C: 1.5, D: 1.0, E: 0.5, F: 0.3 }
+
+data:
+  modeldata_h2s_nofill: ../../data/modeldata_h2s_nofill.parquet
+
+package_pin:
+  tijuana_dispersion: v0.3.0
+
+seed: 42

@@ -17,6 +17,67 @@ Don't delete old entries. The log is the project's memory.
 
 ---
 
+## 2026-05-12 — may1011_event_analysis (model misses a real 177 ppb event)
+
+**Question** (user-triggered): high H₂S was reported May 10–11 ("Berry
+Elementary"). Do our predictions capture it? Are the river sources
+included?
+
+**Scope note**: "Berry Elementary" is **not** in any of our data —
+only 3 monitors exist (IB CIVIC CTR, NESTOR-BES, SAN YSIDRO); not in
+sensors.json; the only "berry" in complaints is "Mulberry Dr" in San
+Marcos (false match). No Berry observations exist to score against.
+
+**Result**: There was a large real event — at **NESTOR-BES**: a sharp
+4-hour nocturnal spike, 171→177→171→156 ppb at 23:00 May 10 → 02:00
+May 11, collapsing by 04:00. SY and IB stayed ≤ 5 ppb. The model
+**misses it entirely**: predicted ≈ 1 ppb against 171–177 observed
+(NESTOR Pearson 0.019 on the May 9–12 window; predicted max 22 ppb vs
+observed 177).
+
+River sources **are** included (36 of 55 sources: 18 channel 3.21 g/s,
+7 drain 4.31 g/s, 11 estuary 1.46 g/s). But during the spike the wind
+was FROM the WNW→NNW (288–340°) at 1.5–1.7 m/s. Bearing analysis: every
+channel source (126–239°) and every drain source (134–212°) sits
+*downwind* of NESTOR for that wind — 0.00 of 7.5 g/s channel+drain is
+in the upwind arc. Only ~1.3 g/s (some estuary + the 2 bay ponds) is
+geometrically able to reach NESTOR, yielding ~1–4 ppb.
+
+**State change**:
+- The model has **no skill on calm-night stagnation events** — exactly
+  the highest, most health-relevant episodes. Apr-holdout Spearman
+  (NESTOR 0.52) reflects well-behaved hours; the model fails when it
+  matters most.
+- Two explanations, (b) the more likely primary:
+  (a) an unmodeled source WNW–NNW of NESTOR (coast / estuary mouth /
+  South Bay), or
+  (b) **calm-night wind is unreliable** (1.5 m/s nocturnal). The
+  original open-questions entry flagged exactly this. Under near-calm
+  down-valley drainage flow the real transport at NESTOR could be from
+  the SE river sources (4–7 g/s, right there) even though the 10 m
+  anemometer reports NW. Sharp onset/offset + 170 ppb under 1.5 m/s
+  that vanishes when wind reaches 5 m/s is textbook nocturnal
+  stagnation, not a well-mixed plume.
+- **Wind-data quality is now the #1 modeling limitation**, ahead of
+  source-field completeness — independently confirmed by this event
+  and the SY representativeness finding.
+
+**Next**:
+1. **Calm-night wind reanalysis** (highest value): pull independent
+   wind (NERR / TJRTLMET or a drainage-flow model) for May 10–11 and
+   compare to the Open-Meteo NESTOR wind. NW vs down-valley SE
+   disagreement would confirm explanation (b) — fix is met-data, not
+   sources.
+2. Add a nocturnal mixing-height / stagnation term (the long-flagged
+   open question — collapsed boundary layer amplifies ground conc 5–10×).
+3. Hold off on more source candidates until the wind question is
+   resolved (would fit a wind artifact).
+4. Berry Elementary: needs coordinates + ideally a monitor feed to
+   evaluate; until calm-night handling improves, predictions there
+   during such events would be unreliable.
+
+---
+
 ## 2026-05-12 — calibration_v3.5 (SY near-field arc) + SY ordering diagnostic
 
 **Question**: ib_metric_reframe identified SAN YSIDRO (not IB) as the

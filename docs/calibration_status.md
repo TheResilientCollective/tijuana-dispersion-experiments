@@ -32,6 +32,44 @@ search — it is in fact our primary, best-fit receptor.)
 
 ---
 
+## 2026-05-16 — box_driver_calibration (qualified positive: ranker, not magnitude)
+
+**Question**: service #6 shipped a temperature-led `E_local(t) =
+E0·Q10^((T−T_ref)/10)` for the box. Calibrated, does the box→driver
+line clear the constant-box held-out rank-skill ceiling (0.127 op /
+0.218 stable_atm)?
+
+**Result**: Yes for *ranking*, no for *magnitude*. Shipped v0.4.0
+model, same chronological 70/30. Identifiability handled (box linear
+in E0 → closed-form; T_ref absorbed into E0, fixed; only Q10 & τ move
+held-out rank skill → amplitude-invariant rank ceiling is the decisive
+stat). Driver-box held-out rank ceiling **0.271** (op) / **0.338**
+(stable_atm) — clears the constant box by **+0.144 / +0.120** (~2×),
+hitting attribution's ~0.33 temperature bound and the floor of the
+0.3–0.5 design target. **But recall@100 = 0.00** everywhere; median
+pred at >100 hrs ≈ 9–10 ppb vs ≈ 167–177 obs (~17–20× short); May
+10-11 event peak 7.7 ppb (no better than the constant box's 9.2) vs
+177. RMSE-optimal Q10=1.5 (bulk-dominated) vs rank-optimal Q10=5.0
+(physical edge) — report the rank-optimal for the operational goal.
+
+**State change**: The box→driver structure is **validated as a
+relative calm-night severity *ranker*** (~2× the constant box, at the
+predicted ceiling) but is **not** an absolute-ppb predictor in the
+extreme regime and must not be shipped/reported as one. Temperature
+ranking tops out ≈0.34; the gap to the autoregressive bound
+(`h2s_lag_1h`≈0.70) is episodic/triggered persistence, **not**
+recoverable by more emission-driver tuning (Q10 already pegged at the
+physical edge). Closes the temperature-emission-driver line on a
+qualified positive.
+
+**Next**: (1) service framing — expose box→driver as a calm-night
+risk *rank/percentile*, keep #2 guardrail for magnitude honesty;
+(2) a *new* magnitude line — event-trigger amplitude (flow/SBIWTP
+spike or h2s-persistence gate) targeting recall@100, baselined
+against this run; (3) `stable_atm` into the classifier (standing rec).
+
+---
+
 ## 2026-05-15 — emission_driver_attribution (temperature is the lever)
 
 **Question**: box_calibration showed Berry's calm-night residual is

@@ -32,6 +32,43 @@ search — it is in fact our primary, best-fit receptor.)
 
 ---
 
+## 2026-05-15 — box_calibration (negative: box necessary, not sufficient)
+
+**Question**: service issue #3 shipped the calm-night accumulation box
++ regime dispatch with deliberately uncalibrated defaults. Does
+*calibrating* it (τ, lumped E_local; H_mix table & area held at
+physical defaults — amplitude is otherwise unidentifiable from one
+receptor) against Berry's 242 >100 ppb hours give the calm-night
+regime real skill?
+
+**Result**: No. Chronological 70/30 split. Held-out **rank-skill
+ceiling** (Spearman, amplitude-invariant → cannot be gamed by the fit)
+is only **0.13** with the operational `is_stagnation` classifier and
+**0.22** with `stable_atm`. recall@100 = **0.00** (lifts none of the
+held-out >100 ppb hours over 100; median pred ~9–11 vs obs ~167–177
+ppb). τ pegs at the 12 h grid max. Shipped-dispatch event check
+(May 10–11): pure Gaussian peak 0.16 ppb → calibrated box 7.9 ppb
+(~50× lift, right direction) but still ~22× short of the 177 ppb
+observed. `stable_atm` again beats the wind-threshold classifier.
+
+**State change**: The box correctly removes the *geometric* Gaussian
+failure but a *constant* lumped emission modulated only by atmospheric
+stability cannot select which calm nights spike — the residual
+variance at Berry is **emission-driven** (upstream production: flow /
+SBIWTP / temperature), not ventilation-driven. The "bare box" line is
+closed the way v3.6 closed the advective line. Keep the shipped box
+(structure + dispatch are correct); do **not** hard-wire these
+uncalibrated τ/E_local as tuned.
+
+**Next**: an **emission-driver term** — make the box's E_local
+time-varying, coupled to the `sbiwtp_*` / `flow_*` / `temperature_2m`
+/ diel proxies already in `modeldata_h2s_nofill` (an `emissions.py`
+extension; design/issue, not a parameter tune). Separately:
+experiments-repo `tijuana-dispersion` pin is `@v0.3.0` (predates the
+box); bump to a release tag including issue #3 (PR-gated).
+
+---
+
 ## 2026-05-15 — calm_night_wind_reanalysis (supports (b); finds a ready classifier)
 
 **Question**: is the model's Berry-extreme miss explained by (a) an

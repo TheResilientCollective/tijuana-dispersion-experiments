@@ -32,6 +32,38 @@ search — it is in fact our primary, best-fit receptor.)
 
 ---
 
+## 2026-05-15 — emission_driver_attribution (temperature is the lever)
+
+**Question**: box_calibration showed Berry's calm-night residual is
+emission-driven. Which *exogenous* driver carries it, and does the
+shipped `emissions.py` form capture it? (Bar: the constant-box
+held-out rank-skill ceiling 0.127 operational / 0.218 stable_atm.)
+
+**Result**: Held-out (same 70/30 split). **`temperature_2m` alone →
+Spearman 0.33** on Berry stagnation hours, both regime definitions —
+2.5×/1.5× the ceiling, monotone, physically coherent (Q10 microbial
+sulfate reduction). No other single exogenous driver clears the bar;
+flow/SBIWTP terms all < 0.11. **The shipped `emissions.py` form,
+unfitted, FAILS: 0.02 / −0.11** — its `f_volatilization ∝ wind²`
+suppresses emissions exactly on calm nights. A non-negative
+multivariable blend is *worse* than temperature alone (parsimony
+wins). Autoregressive `h2s_lag_1h ≈ 0.70` bounds predictability — that
+gap is the persistence the box supplies endogenously.
+
+**State change**: The next component is a **temperature-led
+`E_local(t)`** (Q10 form, `E0`/`T_ref` to be calibrated), feeding the
+existing box; the wind-quadratic volatilization factor must be
+**excluded** from the box path (it has the wrong sign for the trapped
+regime). Substrate/flow is optional/secondary. Realistic driven-box
+target ≈ 0.3–0.5 Spearman, not 0.7 (box memory carries the rest).
+
+**Next**: service-repo issue — time-varying `E_local(t)` wired from
+`EmissionsModel` into the stagnation box (drafted from this
+evidence); then paired experiments-repo calibration of Q10/T_ref/E0
+on the box path vs the 0.127/0.218 bar.
+
+---
+
 ## 2026-05-15 — box_calibration (negative: box necessary, not sufficient)
 
 **Question**: service issue #3 shipped the calm-night accumulation box

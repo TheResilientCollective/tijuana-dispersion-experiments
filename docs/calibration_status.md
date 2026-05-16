@@ -32,6 +32,42 @@ search — it is in fact our primary, best-fit receptor.)
 
 ---
 
+## 2026-05-16 — event_trigger_magnitude (capstone: exogenous magnitude is unreachable)
+
+**Question**: box→driver ranks calm nights but recall@100 = 0. Does an
+episodic trigger (via the shipped #6 `substrate` multiplier hook)
+recover magnitude — and is the usable trigger exogenous (forward) or
+only autoregressive (nowcast)?
+
+**Result**: 7 exogenous episodic features × 4 percentiles × 5 boosts,
+Youden-J@100 train objective, same 70/30 split. **Every exogenous
+trigger: held-out recall@100 = 0.00, precision = 0.00** (best train
+J ≈ 0.02 — nothing fires on the right hours). The autoregressive
+reference (`h2s_lag_1h`, NOT forward-usable) reaches recall ≈ 0.21,
+precision ≈ 0.35, Spearman ≈ 0.45.
+
+**State change (capstone of the whole calm-night arc)**: Berry's
+>100 ppb nocturnal extremes are **not predictable from any exogenous
+input in this dataset** — advection (v3→v3.6), constant box, the
+temperature emission driver (ranks only), and now any exogenous
+episodic trigger all fail on magnitude. The forward model's ceiling
+in this regime is **ranking** (Spearman ≈0.27–0.34); **magnitude is
+reachable only autoregressively** (a nowcast/persistence product, a
+different class from the forward model), and even then modestly
+(recall ≈0.21). The binding constraint is **data, not modelling**:
+stop calibrating the forward model against Berry's extremes — that
+line is exhausted.
+
+**Next**: (1) keep the #2 guardrail + "box→driver = ranker" posture
+(already correct, now fully evidence-backed); (2) if extreme
+magnitude is required, scope it as a **separate persistence/nowcast
+component** fed by recent observed H2S / a real-time upstream sensor,
+with realistic targets (recall ≈0.2); (3) the real lever is **new
+real-time/independent data** (anemometer, upstream H2S) — modelling
+of `modeldata_h2s_nofill` is exhausted for this regime.
+
+---
+
 ## 2026-05-16 — box_driver_calibration (qualified positive: ranker, not magnitude)
 
 **Question**: service #6 shipped a temperature-led `E_local(t) =

@@ -32,6 +32,53 @@ search — it is in fact our primary, best-fit receptor.)
 
 ---
 
+## 2026-05-15 — calm_night_wind_reanalysis (supports (b); finds a ready classifier)
+
+**Question**: is the model's Berry-extreme miss explained by (a) an
+unmodelled WNW–NNW source or (b) unreliable calm-night wind direction?
+Status log said: pull an independent anemometer (NERR/TJRTLMET).
+
+**Result**: No independent anemometer exists in the pipeline
+(`data/manifest.yaml` ships only Open-Meteo; `modeldata_forecast_15min`
+fetched corrupt). Ran the strongest internal-consistency reanalysis
+instead:
+- The dataset's own **`stable_atm` flag marks 88% of Berry's 242
+  >100 ppb hours** (vs 33% baseline) and *every* May 10-11 spike hour.
+- Wind direction rotates ~68° across the four >100 ppb hours (~115°
+  across the surrounding calm window) at 1.5–2.5 m/s; ends the hour
+  speed returns to ~5.7 m/s and `stable_atm`→0.
+- Hour-to-hour |Δdir| is **4× noisier** calm-night (28.9°) than windy
+  (6.8°). SY vs NESTOR Open-Meteo direction diverge **up to 52°**
+  during the spike (4 km apart).
+- Gust/mean ratio was **non-discriminating** (2.79 vs 2.88) — negative
+  result, recorded.
+
+**State change**:
+- Explanation **(b) is well-supported**: the calm-night Open-Meteo
+  wind *direction* is unreliable for plume routing. The earlier
+  "river sources are downwind of Berry → predict ≈0" conclusion rests
+  on a direction the data itself flags stable, that is 4× noisier and
+  rotates ~68° in four hours and disagrees with the adjacent grid
+  point by up to 52°. The Berry miss is **at least partly a met-input
+  failure, not purely a missing source.**
+- **Cannot positively confirm (a) vs (b)** without external met — the
+  reanalysis shows the wind is untrustworthy, not that the SE river
+  sources are the cause. Stated explicitly to avoid over-claiming.
+- **A stagnation classifier already exists**: `stable_atm` (88%
+  precision on >100 ppb) is better than the raw `is_night & wind<2.5`
+  heuristic in service-repo guardrail PR #4 / box-model issue #3.
+
+**Next**:
+1. Add an independent anemometer (NERR TJRTLMET / SD APCD) +
+   fix the corrupt `modeldata_forecast_15min` in `data/manifest.yaml`
+   (PR-gated — flagged, not done). Only way to positively close (a)/(b).
+2. Service repo: re-key issue #2 (guardrail) and #3 (`stagnation_box`)
+   off `stable_atm` rather than a raw wind threshold.
+3. Ignore wind direction when `stable_atm=1` & speed<~2.5 in any
+   advective routing.
+
+---
+
 ## 2026-05-12 — calibration_v3.6 (nocturnal mixing-lid, Tier-1) — rejected, decisive
 
 **Question**: does a limited-mixing Gaussian lid (trap emissions under

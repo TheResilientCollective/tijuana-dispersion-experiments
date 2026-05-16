@@ -32,6 +32,44 @@ search — it is in fact our primary, best-fit receptor.)
 
 ---
 
+## 2026-05-15 — sobol_full (issue #2): NRP pipeline + local reduced-N proof
+
+**Question**: proper Sobol indices (S1/ST) for the 11 emission
+parameters, replacing the 2026-05-05 LHS Pearson proxy; also the first
+NRP workload (plumbing test).
+
+**Result**: NRP Dagster pipeline implemented and locally validated
+(one partition end-to-end; science unit-tested incl. real-data
+integration; submission/fetch scripts dry-run clean). A local
+reduced-N Sobol (N=24, 312 samples) ran end-to-end via the shared
+`nrp/sobol.py` helpers. **Indices not converged at N=24** (small-N
+Saltelli noise — ranking indicative only); full N=8192 (~106k samples)
+needs NRP.
+
+Indicative ranking shift vs the LHS proxy:
+- `diel_phase_hours` is a strong *first-order* driver of the
+  correlation/timing metrics (S1 ≈ 0.5–0.8 at SY/Berry) —
+  independently corroborates the v3 line's diel-timing finding via a
+  real variance decomposition.
+- `T_ref_c` dominates the *magnitude* metrics through *interactions*
+  (ST ≫ S1) — invisible to a Pearson proxy.
+- `f_arch_estuary` still matters (IB corr ST≈0.62) but is no longer the
+  single headline the 2026-05-05 LHS suggested.
+
+**State change**: the "f_arch_estuary is the dominant sensitivity"
+belief (from the LHS proxy) is superseded — under proper Sobol the
+leading levers are diel phase (timing, first-order) and T_ref_c
+(magnitude, interaction-driven). Treat as provisional until the
+converged NRP run. NRP pipeline is now unblocked on code; remaining
+blockers are infra-only (`nrp/README.md` "Decisions blocking
+deployment").
+
+**Next**: resolve NRP infra decisions → `submit_sobol.py --dry-run` →
+live N=8192 → `fetch_sobol_results.py` → replace the experiment's
+RESULTS indices with the converged full-scale table + CIs.
+
+---
+
 ## 2026-05-12 — calibration_v3.6 (nocturnal mixing-lid, Tier-1) — rejected, decisive
 
 **Question**: does a limited-mixing Gaussian lid (trap emissions under

@@ -60,3 +60,4 @@ Thumbs.db
 
 # Dagster local runtime state (NRP local dev) — never committed
 dagster_home/
+.dagster_io/

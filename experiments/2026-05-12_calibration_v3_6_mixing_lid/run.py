@@ -282,7 +282,7 @@ def main() -> None:
 
     tr, ho = config["windows"]["train"], config["windows"]["holdout"]
     df_tr = v35.load_window(parquet, tr["start"], tr["end"])
-    met_tr, obs_tr, hrs_tr = v35.build_met_and_obs(df_tr, rec_names)
+    met_tr, obs_tr, _hrs_tr = v35.build_met_and_obs(df_tr, rec_names)
     df_ho = v35.load_window(parquet, ho["start"], ho["end"])
     met_ho, obs_ho, hrs_ho = v35.build_met_and_obs(df_ho, rec_names)
     log.info("train %d h, holdout %d h", len(met_tr), len(met_ho))

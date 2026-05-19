@@ -58,47 +58,39 @@ Notes:
 
 ## 2. Namespace RBAC — `dagster-nrp` ServiceAccount
 
-The k8s_job_executor is configured with `service_account_name:
-"dagster-nrp"`. Create it with just enough to manage step Jobs:
+Committed manifest: **`nrp/k8s/rbac.yaml`** (SA + least-privilege Role
+[jobs, pods, pods/log, secrets/configmaps] + RoleBinding). Validated
+client-side (`kubectl apply --dry-run=client`).
 
-```yaml
-# nrp/k8s/rbac.yaml   (apply: kubectl apply -f nrp/k8s/rbac.yaml -n ucsd-center4health)
-apiVersion: v1
-kind: ServiceAccount
-metadata: { name: dagster-nrp }
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata: { name: dagster-nrp }
-rules:
-  - apiGroups: ["batch"]
-    resources: ["jobs"]
-    verbs: ["create", "get", "list", "watch", "delete"]
-  - apiGroups: [""]
-    resources: ["pods", "pods/log"]
-    verbs: ["get", "list", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata: { name: dagster-nrp }
-subjects: [{ kind: ServiceAccount, name: dagster-nrp }]
-roleRef: { kind: Role, name: dagster-nrp, apiGroup: rbac.authorization.k8s.io }
+```bash
+kubectl apply -f nrp/k8s/rbac.yaml -n ucsd-center4health
+kubectl get sa dagster-nrp -n ucsd-center4health           # exists
+kubectl auth can-i create jobs -n ucsd-center4health \
+  --as=system:serviceaccount:ucsd-center4health:dagster-nrp # yes
 ```
-
-Check: `kubectl get sa dagster-nrp -n ucsd-center4health` → exists.
 
 ## 3. Secrets
 
+One secret, **`object-store-credentials`** — the name + the AWS keys
+match the existing `nrp/k8s/job_template.yaml`, and the Helm
+`envSecrets` (next step) injects **every key verbatim as an env var**,
+so the keys must be the literal names the code reads:
+
 ```bash
-kubectl create secret generic dagster-nrp-env -n ucsd-center4health \
-  --from-literal=AWS_ACCESS_KEY_ID=… \
-  --from-literal=AWS_SECRET_ACCESS_KEY=… \
+kubectl create secret generic object-store-credentials -n ucsd-center4health \
+  --from-literal=AWS_ACCESS_KEY_ID=…            \
+  --from-literal=AWS_SECRET_ACCESS_KEY=…        \
   --from-literal=S3_ENDPOINT_URL=https://oss.resilientservice.mooo.com \
-  --from-literal=AWS_DEFAULT_REGION=us-west-2 \
+  --from-literal=AWS_DEFAULT_REGION=us-west-2   \
   --from-literal=DAGSTER_S3_BUCKET=tj-calibration \
-  --from-literal=SLACK_WEBHOOK_WATCH=… \
-  --from-literal=SLACK_WEBHOOK_CRITICAL=… \
+  --from-literal=SLACK_WEBHOOK_WATCH=…          \
+  --from-literal=SLACK_WEBHOOK_CRITICAL=…       \
   --from-literal=NRP_NAMESPACE=ucsd-center4health
+
+# Postgres password for the existing in-cluster instance, referenced by
+# values.yaml global.postgresqlSecretName (key MUST be postgresql-password):
+kubectl create secret generic dagster-postgresql-secret -n ucsd-center4health \
+  --from-literal=postgresql-password=…
 ```
 
 (Values are in `nrp/.env` locally — never commit them. `DAGSTER_S3_BUCKET`
@@ -106,44 +98,26 @@ must be set so the env-adaptive IO manager selects S3, not filesystem.)
 
 ## 4. Deploy Dagster (webserver + daemon) into the namespace
 
-Use the official Helm chart with the in-cluster Postgres that
-`nrp/.env` already points at (`dagster-postgres.ucsd-center4health.svc`).
+Committed values: **`nrp/k8s/dagster-values.yaml`** (daemon enabled —
+required for the fan-out; `K8sRunLauncher` with `dagster-nrp` SA +
+`object-store-credentials`; external in-cluster Postgres; the `nrp`
+code location = `-m nrp.definitions`). Fill the `TODO_DIGEST` image
+first (§1).
 
 ```bash
-helm repo add dagster https://dagster-io.github.io/helm
+helm repo add dagster https://dagster-io.github.io/helm && helm repo update
+# PRE-FLIGHT — this values file could not be helm-template-checked
+# offline; validate it against the pinned chart version first:
+helm template dagster dagster/dagster -n ucsd-center4health \
+  -f nrp/k8s/dagster-values.yaml | kubectl apply --dry-run=client -f -
 helm upgrade --install dagster dagster/dagster -n ucsd-center4health \
-  -f nrp/k8s/dagster-values.yaml
-```
-
-`dagster-values.yaml` essentials (skeleton — fill image/digest/host):
-
-```yaml
-dagsterWebserver: { workspace: { enabled: true } }
-dagsterDaemon: { enabled: true }                 # REQUIRED for the fan-out
-runLauncher:
-  type: K8sRunLauncher
-  config:
-    k8sRunLauncher:
-      serviceAccountName: dagster-nrp
-      jobNamespace: ucsd-center4health
-      imagePullPolicy: IfNotPresent
-      envSecrets: [{ name: dagster-nrp-env }]
-postgresql:
-  enabled: false                                  # use the existing one
-  postgresqlHost: dagster-postgres.ucsd-center4health.svc.cluster.local
-generatePostgresqlPasswordSecret: false
-deployments:
-  - name: nrp
-    image: { repository: registry.nrp-nautilus.io/ucsd-center4health/nrp-worker, tag: "<digest>" }
-    dagsterApiGrpcArgs: ["-m", "nrp.definitions"]
-    port: 3030
-    envSecrets: [{ name: dagster-nrp-env }]
+  --version <pin> -f nrp/k8s/dagster-values.yaml
 ```
 
 Checks:
 - `kubectl get pods -n ucsd-center4health` → `dagster-webserver`,
   `dagster-daemon`, and the `nrp` code-location pod all `Running`.
-- `kubectl port-forward svc/dagster-webserver 3000 -n ucsd-center4health`
+- `kubectl port-forward svc/dagster-webserver 3000:80 -n ucsd-center4health`
   → UI shows the asset graph, `sobol_chunk_results` with 100 partitions.
 
 ## 5. Smoke on-cluster (one partition as a real K8s Job)

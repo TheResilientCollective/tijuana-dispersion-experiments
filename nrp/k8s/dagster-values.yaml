@@ -1,0 +1,84 @@
+# Helm values for the official `dagster/dagster` chart, NRP deployment.
+#
+#   helm repo add dagster https://dagster-io.github.io/helm
+#   helm repo update
+#   # PRE-FLIGHT (validate against the installed chart version — this
+#   # file could not be `helm template`-checked offline when written):
+#   helm template dagster dagster/dagster -n ucsd-center4health \
+#     -f nrp/k8s/dagster-values.yaml | kubectl apply --dry-run=client -f -
+#   helm upgrade --install dagster dagster/dagster -n ucsd-center4health \
+#     -f nrp/k8s/dagster-values.yaml
+#
+# Fill every TODO before installing. Keys follow the standard dagster
+# chart; pin the chart version (`--version`) and re-check the value
+# paths against `helm show values dagster/dagster` for that version.
+
+global:
+  # Existing secret holding `postgresql-password` (create separately —
+  # never commit it). The in-cluster PG is referenced by nrp/.env.
+  postgresqlSecretName: dagster-postgresql-secret  # pragma: allowlist secret  (secret *name*, not a value)
+
+# Reuse our pre-created least-privilege SA (nrp/k8s/rbac.yaml) for the
+# webserver/daemon AND launched run/step pods, so the daemon (which
+# hosts the run launcher) has the job-create RBAC.
+serviceAccount:
+  create: false
+  name: dagster-nrp
+
+# REQUIRED for the Sobol fan-out: the daemon runs the backfill that
+# launches the 100 per-partition runs. Without it, multi-run
+# partitioned materialization does not execute.
+dagsterDaemon:
+  enabled: true
+
+dagsterWebserver:
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 80
+  # Reach it with: kubectl port-forward svc/dagster-webserver 3000:80
+  # -n ucsd-center4health  (add an Ingress here only if NRP exposes one)
+
+# Per-run/step K8s Jobs (one pod per Sobol chunk).
+runLauncher:
+  type: K8sRunLauncher
+  config:
+    k8sRunLauncher:
+      imagePullPolicy: IfNotPresent
+      jobNamespace: ucsd-center4health
+      serviceAccountName: dagster-nrp
+      # All step pods get the full env (S3 creds+endpoint+bucket, Slack,
+      # NRP_NAMESPACE) from this one secret — matches the keys in
+      # nrp/k8s/job_template.yaml (object-store-credentials).
+      envSecrets:
+        - name: object-store-credentials
+
+# External Postgres (the in-cluster instance nrp/.env points at).
+generatePostgresqlPasswordSecret: false
+postgresql:
+  enabled: false
+  postgresqlHost: dagster-postgres.ucsd-center4health.svc.cluster.local
+  postgresqlUsername: dagster
+  postgresqlDatabase: dagster
+  service:
+    port: 5432
+
+# The NRP code location (our Dagster project: `nrp.definitions`).
+dagster-user-deployments:
+  enabled: true
+  deployments:
+    - name: nrp
+      # TODO: digest-pinned worker image (must match nrp/.env
+      # DAGSTER_IMAGE; build/push per nrp/DEPLOYMENT.md §1).
+      image:
+        repository: registry.nrp-nautilus.io/ucsd-center4health/nrp-worker
+        tag: "TODO_DIGEST"  # e.g. sha256:... — never :latest
+        pullPolicy: IfNotPresent
+      dagsterApiGrpcArgs:
+        - "-m"
+        - "nrp.definitions"
+      port: 3030
+      includeConfigInLaunchedRuns:
+        enabled: true
+      envSecrets:
+        - name: object-store-credentials

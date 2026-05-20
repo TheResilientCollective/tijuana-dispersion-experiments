@@ -12,6 +12,23 @@
 export GH_TOKEN="${GH_TOKEN:-$(gh auth token 2>/dev/null)}"
 
 # ---------------------------------------------------------------------------
+# NRP GitLab — needed to push to registry.nrp-nautilus.io (§1)
+# Create at: https://gitlab.nrp-nautilus.io/-/user_settings/personal_access_tokens
+# Required scopes: read_registry, write_registry
+# ---------------------------------------------------------------------------
+export GITLAB_USER="${GITLAB_USER:-}"                         # FILL IN — your NRP GitLab username
+export GITLAB_TOKEN="${GITLAB_TOKEN:-}"                       # FILL IN — glpat-…
+
+if [[ -n "${GITLAB_TOKEN}" && -n "${GITLAB_USER}" ]]; then
+    echo "${GITLAB_TOKEN}" | docker login registry.nrp-nautilus.io \
+        -u "${GITLAB_USER}" --password-stdin \
+        && echo "  docker login registry.nrp-nautilus.io — OK" \
+        || echo "  docker login registry.nrp-nautilus.io — FAILED"
+else
+    echo "  docker login skipped — set GITLAB_USER and GITLAB_TOKEN to enable"
+fi
+
+# ---------------------------------------------------------------------------
 # Worker image — set TAG before building, DAGSTER_IMAGE after pushing (§1)
 # ---------------------------------------------------------------------------
 export TAG="${TAG:-registry.nrp-nautilus.io/ucsd-center4health/nrp-worker:$(git -C "$(dirname "${BASH_SOURCE[0]}")/.." rev-parse --short HEAD 2>/dev/null || echo dev)}"
@@ -59,4 +76,5 @@ export DAGSTER_PG_DB="${DAGSTER_PG_DB:-dagster}"
 echo "NRP env loaded — TAG=${TAG}"
 echo "  DAGSTER_IMAGE=${DAGSTER_IMAGE:-<not set — fill in after docker push>}"
 echo "  AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-<not set>}"
+echo "  GITLAB_USER=${GITLAB_USER:-<not set>}"
 echo "  DAGSTER_HOME=${DAGSTER_HOME}"

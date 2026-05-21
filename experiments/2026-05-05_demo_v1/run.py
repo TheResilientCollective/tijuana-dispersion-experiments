@@ -1,5 +1,4 @@
-"""
-Demo run: forward model + inversion for March 13-15, 2026 window
+"""Demo run: forward model + inversion for March 13-15, 2026 window
 covering the documented Stewart's Drain spill event.
 
 This is a 'rough run' to prove the service pipeline works end-to-end
@@ -119,7 +118,7 @@ def build_met_series(df_window):
                 if not pd.isna(row["cloud_cover"])
                 else 0.5,
                 is_night=bool(row["is_night"] >= 0.5) if not pd.isna(row["is_night"]) else False,
-            )
+            ),
         )
     return met_list
 
@@ -151,7 +150,7 @@ def main():
 
     n_obs = (~np.isnan(obs)).sum()
     print(
-        f"Observations: {n_obs} non-NaN cells across {len(hours)}h × {len(RECEPTORS)} receptors\n"
+        f"Observations: {n_obs} non-NaN cells across {len(hours)}h × {len(RECEPTORS)} receptors\n",
     )
 
     # ---------- 1. Forward run with seed rates ---------- #
@@ -243,7 +242,7 @@ def main():
             **{f"obs_{r}": obs[:, i] for i, r in enumerate(receptor_names)},
             **{f"pred_seed_{r}": pred_seed[:, i] for i, r in enumerate(receptor_names)},
             **{f"pred_fit_{r}": pred_fit[:, i] for i, r in enumerate(receptor_names)},
-        }
+        },
     )
     ts_df.to_csv(OUT_DIR / "demo_timeseries.csv", index=False)
     print(f"Time series saved to {OUT_DIR / 'demo_timeseries.csv'}")

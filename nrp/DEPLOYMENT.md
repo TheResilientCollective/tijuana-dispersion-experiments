@@ -1,23 +1,20 @@
 # NRP deployment runbook — Sobol workload
 
-Status of the moving parts, established by probing on 2026-05-18
-(not assumed). Do the steps in order; each has a concrete check.
+Validated end-to-end on 2026-05-20/21. Do the steps in order; each
+has a concrete check.
 
-## 0. Readiness snapshot
+## 0. Readiness snapshot (updated 2026-05-21)
 
 | Component | State | Evidence |
 |---|---|---|
 | Kube context | ✅ `nautilus` (NRP), ns `ucsd-center4health` | `kubectl config current-context` |
 | RBAC: create Jobs in ns | ✅ `yes` | `kubectl auth can-i create jobs -n ucsd-center4health` |
-| Object store | ✅ `https://oss.resilientservice.mooo.com`, bucket **`tj-calibration`** reachable, creds in `nrp/.env` valid | read-only `list_objects_v2` |
-| Worker image | ✅ builds & runs a real chunk end-to-end (after the Dockerfile fixes in this PR) | local `docker build` + in-container `evaluate_sample` |
-| Worker image pushed to a registry NRP can pull | ❌ not done | `DAGSTER_IMAGE` digest must be set in `nrp/.env` |
-| Dagster runtime in the namespace (webserver + **daemon**) | ❌ **none** | `kubectl get pods -n ucsd-center4health` → no resources |
-| `dagster-nrp` ServiceAccount + RBAC | ❌ `NotFound` | `kubectl get sa dagster-nrp -n …` |
-
-**The only hard blockers are the last three** — all deployment/provisioning,
-none code. The pipeline is implemented, CI-green (PR #5), and validated
-locally end-to-end (100 chunks → aggregate).
+| Object store | ✅ `https://oss.resilientservice.mooo.com`, bucket **`tj-calibration`** reachable | read-only `list_objects_v2` |
+| Worker image | ✅ built, pushed, runs on-cluster | `gitlab-registry.nrp-nautilus.io/ucsd-center4health/nrp-worker` |
+| `dagster-nrp` ServiceAccount + RBAC | ✅ created | `kubectl get sa dagster-nrp -n ucsd-center4health` |
+| Dagster runtime (webserver + daemon) | ✅ Helm chart `dagster/dagster` v1.13.5 | `kubectl get pods -n ucsd-center4health` |
+| Built-in PostgreSQL | ✅ managed by the Helm chart subchart | `dagster-postgresql-0` pod |
+| Sobol backfill (100 chunks) | ✅ completed | backfill `nvntbbst` |
 
 > Why a daemon is required: the assets use per-partition **multi-run**
 > fan-out (one K8s Job per chunk — the correct NRP model). That is a
@@ -25,42 +22,62 @@ locally end-to-end (100 chunks → aggregate).
 > **not** use `BackfillPolicy.single_run()` (that would collapse 100
 > chunks into one pod and defeat the parallelism).
 
+## Prerequisites
+
+- `kubectl` configured with the `nautilus` context
+- `helm` (installed via `brew install helm`)
+- `docker` with BuildKit support (Docker Desktop)
+- `GITLAB_USER` and `GITLAB_TOKEN` env vars for `gitlab-registry.nrp-nautilus.io`
+  (create token at `https://gitlab.nrp-nautilus.io/-/user_settings/personal_access_tokens`,
+  scopes: `read_registry`, `write_registry`)
+- `GH_TOKEN` for cloning the private `tijuana-dispersion` service repo
+
 ## 1. Build & push the worker image
 
 The `service` extra (`tijuana-dispersion`) is a **private** git
 dependency, so the build needs a GitHub token via a BuildKit secret
 (never layered). Data is baked from `data/` — fetch it first.
 
-```bash
-uv run python scripts/fetch_data.py --only modeldata_h2s_nofill   # ensure data/ present
-export GH_TOKEN=$(gh auth token)          # read access to the private service repo
-TAG=registry.nrp-nautilus.io/ucsd-center4health/nrp-worker:$(git rev-parse --short HEAD)
+**Important**: Build with `--platform linux/amd64` — NRP nodes are
+amd64; building on Apple Silicon without this flag produces arm64
+images that fail with `no match for platform in manifest`.
 
-DOCKER_BUILDKIT=1 docker build -f nrp/Dockerfile --target worker \
+**Important**: `dagster-postgres` must be in `pyproject.toml`
+dependencies. Without it, K8s run pods crash with
+`Couldn't import module dagster_postgres.run_storage`.
+
+```bash
+# From the repo root:
+source nrp/.env            # loads AWS keys, GITLAB creds, etc.
+source nrp/env.sh           # sets TAG, logs into GitLab registry
+# If TAG is stale from a previous session:
+unset TAG DAGSTER_IMAGE && source nrp/env.sh
+
+uv run python scripts/fetch_data.py --only modeldata_h2s_nofill
+
+DOCKER_BUILDKIT=1 docker build -f nrp/Dockerfile \
+  --platform linux/amd64 --target worker \
   --secret id=gh_token,env=GH_TOKEN -t "$TAG" .
 docker push "$TAG"
-DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$TAG")
-echo "DAGSTER_IMAGE=$DIGEST"             # put this (digest-pinned) in nrp/.env
+export DAGSTER_IMAGE=$(docker inspect --format='{{index .RepoDigests 0}}' "$TAG")
+echo "DAGSTER_IMAGE=$DAGSTER_IMAGE"
 ```
 
-Checks (all pass locally with this PR's Dockerfile):
-- `docker run --rm "$TAG" python -c "import tijuana_dispersion, dagster, SALib; from nrp import sobol"` → clean.
-- `docker run --rm "$TAG" python -c "from nrp import sobol; d=sobol.load_window(sobol.DEFAULT_PARQUET, sobol.DEFAULT_WINDOW); print(len(d))"` → non-zero (data baked).
+Checks:
+- `docker run --rm --platform linux/amd64 "$TAG" python -c "import dagster_postgres, tijuana_dispersion, dagster, SALib; from nrp import sobol"` → clean.
+- `docker run --rm --platform linux/amd64 "$TAG" python -c "from nrp import sobol; d=sobol.load_window(sobol.DEFAULT_PARQUET, sobol.DEFAULT_WINDOW); print(len(d))"` → non-zero (data baked).
 
 Notes:
 - Token-free sanity build (no service/data-dependent code): `docker build --target base …`.
-- `tijuana_dispersion.__version__` reports `0.3.0` even though pinned at
-  tag **v0.4.0** — cosmetic (the constant was never bumped upstream);
-  the *code* is the v0.4.0 box+driver+puff. Don't gate on `__version__`.
-- Registry choice (`registry.nrp-nautilus.io` vs GHCR) is a standing
-  decision (issue "Things to figure out"); the commands assume the
-  NRP registry, which the namespace can pull without extra pull-secrets.
+- `env.sh` uses `${TAG:-…}` — if TAG is already set in the shell from a previous session,
+  it won't pick up the new default. Always `unset TAG` before re-sourcing.
+- The registry is `gitlab-registry.nrp-nautilus.io` (**not** `registry.nrp-nautilus.io`,
+  which returns 404).
 
 ## 2. Namespace RBAC — `dagster-nrp` ServiceAccount
 
 Committed manifest: **`nrp/k8s/rbac.yaml`** (SA + least-privilege Role
-[jobs, pods, pods/log, secrets/configmaps] + RoleBinding). Validated
-client-side (`kubectl apply --dry-run=client`).
+[jobs, pods, pods/log, secrets/configmaps] + RoleBinding).
 
 ```bash
 kubectl apply -f nrp/k8s/rbac.yaml -n ucsd-center4health
@@ -71,100 +88,216 @@ kubectl auth can-i create jobs -n ucsd-center4health \
 
 ## 3. Secrets
 
-One secret, **`object-store-credentials`** — the name + the AWS keys
-match the existing `nrp/k8s/job_template.yaml`, and the Helm
-`envSecrets` (next step) injects **every key verbatim as an env var**,
-so the keys must be the literal names the code reads:
+Two secrets are needed. If sourcing `nrp/.env` first, shell variables
+can be used directly (e.g. `"$AWS_ACCESS_KEY_ID"`).
 
 ```bash
-kubectl create secret generic object-store-credentials -n ucsd-center4health \
-  --from-literal=AWS_ACCESS_KEY_ID=…            \
-  --from-literal=AWS_SECRET_ACCESS_KEY=…        \
-  --from-literal=S3_ENDPOINT_URL=https://oss.resilientservice.mooo.com \
-  --from-literal=AWS_DEFAULT_REGION=us-west-2   \
-  --from-literal=DAGSTER_S3_BUCKET=tj-calibration \
-  --from-literal=SLACK_WEBHOOK_WATCH=…          \
-  --from-literal=SLACK_WEBHOOK_CRITICAL=…       \
-  --from-literal=NRP_NAMESPACE=ucsd-center4health
+source nrp/.env
 
-# Postgres password for the existing in-cluster instance, referenced by
-# values.yaml global.postgresqlSecretName (key MUST be postgresql-password):
-kubectl create secret generic dagster-postgresql-secret -n ucsd-center4health \
-  --from-literal=postgresql-password=…
+# Object store + app credentials (all keys become env vars in worker pods)
+kubectl create secret generic object-store-credentials -n ucsd-center4health \
+  --from-literal=AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID"            \
+  --from-literal=AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY"    \
+  --from-literal=S3_ENDPOINT_URL="$S3_ENDPOINT_URL"                \
+  --from-literal=AWS_DEFAULT_REGION="$AWS_DEFAULT_REGION"          \
+  --from-literal=DAGSTER_S3_BUCKET="$DAGSTER_S3_BUCKET"            \
+  --from-literal=SLACK_WEBHOOK_WATCH="$SLACK_WEBHOOK_WATCH"        \
+  --from-literal=SLACK_WEBHOOK_CRITICAL="$SLACK_WEBHOOK_CRITICAL"  \
+  --from-literal=NRP_NAMESPACE="$NRP_NAMESPACE"
+
+# GitLab registry pull secret (needed by all pods pulling the worker image)
+kubectl create secret docker-registry gitlab-registry-cred -n ucsd-center4health \
+  --docker-server=gitlab-registry.nrp-nautilus.io \
+  --docker-username="$GITLAB_USER" \
+  --docker-password="$GITLAB_TOKEN"
 ```
 
-(Values are in `nrp/.env` locally — never commit them. `DAGSTER_S3_BUCKET`
-must be set so the env-adaptive IO manager selects S3, not filesystem.)
+Note: The Postgres password secret (`dagster-postgresql`) is auto-managed
+by the Helm chart's built-in Bitnami PostgreSQL subchart — do not create
+it manually.
 
 ## 4. Deploy Dagster (webserver + daemon) into the namespace
 
-Committed values: **`nrp/k8s/dagster-values.yaml`** (daemon enabled —
-required for the fan-out; `K8sRunLauncher` with `dagster-nrp` SA +
-`object-store-credentials`; external in-cluster Postgres; the `nrp`
-code location = `-m nrp.definitions`). Fill the `TODO_DIGEST` image
-first (§1).
+Committed values: **`nrp/k8s/dagster-values.yaml`**. Key settings
+validated during the 2026-05-20 deployment:
+
+- **Chart version**: `1.13.5` (pin this in the `--version` flag)
+- **Built-in PostgreSQL**: `postgresql.enabled: true` — the chart
+  provisions its own Bitnami PG. `global.postgresqlSecretName` must
+  point to `dagster-postgresql` (the auto-created secret), not a
+  manually created one.
+- **Resource limits**: NRP's Gatekeeper policy requires CPU+memory
+  requests and memory limits on all containers. All deployments have
+  `100m`/`256Mi` requests and `500m`/`512Mi` limits.
+- **imagePullSecrets**: set at both top-level and under
+  `dagster-user-deployments` (the chart does not propagate them).
+- **`serviceAccountName`** is NOT a valid key inside
+  `runLauncher.config.k8sRunLauncher` in chart v1.13.5. The SA is set
+  via the top-level `serviceAccount.name`.
 
 ```bash
 helm repo add dagster https://dagster-io.github.io/helm && helm repo update
-# PRE-FLIGHT — this values file could not be helm-template-checked
-# offline; validate it against the pinned chart version first:
-helm template dagster dagster/dagster -n ucsd-center4health \
+
+# PRE-FLIGHT — validate the values against the chart schema:
+helm template dagster dagster/dagster -n ucsd-center4health --version 1.13.5 \
   -f nrp/k8s/dagster-values.yaml | kubectl apply --dry-run=client -f -
+
+# Install / upgrade:
 helm upgrade --install dagster dagster/dagster -n ucsd-center4health \
-  --version <pin> -f nrp/k8s/dagster-values.yaml
+  --version 1.13.5 -f nrp/k8s/dagster-values.yaml
 ```
 
 Checks:
-- `kubectl get pods -n ucsd-center4health` → `dagster-webserver`,
-  `dagster-daemon`, and the `nrp` code-location pod all `Running`.
-- `kubectl port-forward svc/dagster-webserver 3000:80 -n ucsd-center4health`
-  → UI shows the asset graph, `sobol_chunk_results` with 100 partitions.
+- `kubectl get pods -n ucsd-center4health` → four pods, all `1/1 Running`:
+  `dagster-daemon`, `dagster-dagster-webserver`, `dagster-dagster-user-deployments-nrp`,
+  `dagster-postgresql-0`.
+- Port-forward and verify the UI:
+  ```bash
+  kubectl port-forward svc/dagster-dagster-webserver 3000:80 -n ucsd-center4health
+  # → http://127.0.0.1:3000 shows the asset graph with sobol_chunk_results (100 partitions)
+  ```
 
-## 5. Smoke on-cluster (one partition as a real K8s Job)
+## 5. Smoke test (one partition)
 
-From the UI (or `dagster job launch`), materialize
-`sobol_chunk_results` partition `chunk_000`. Confirm:
-- a K8s Job/pod is created (`kubectl get jobs -n ucsd-center4health`),
-- it completes,
-- the artifact lands at `s3://tj-calibration/dagster/runs/…/sobol_chunk_results/chunk_000`.
+Materialize `sobol_chunk_results` partition `chunk_000` locally to
+validate the pipeline end-to-end:
+
+```bash
+source nrp/.env && source nrp/env.sh
+uv run dagster asset materialize -m nrp.definitions \
+  --select sobol_chunk_results --partition chunk_000
+```
+
+This runs locally (multiprocess executor). Confirm `RUN_SUCCESS` in
+the output and that the S3 IO manager initializes (`RESOURCE_INIT_SUCCESS`
+for `s3_io`). If AWS keys are not set in the shell, the asset writes
+to local filesystem instead — this is expected for a local smoke test.
 
 ## 6. Full submission
 
+The `dg launch` CLI does **not** support multi-partition backfills
+without `BackfillPolicy.single_run()`. Submit via the Dagster GraphQL
+API instead, which delegates to the in-cluster daemon.
+
+### 6a. Preview the plan (dry-run)
+
 ```bash
-# Dry-run first (prints the plan; no submission):
-uv run python nrp/scripts/submit_sobol.py --dry-run --n-base-samples 8192
-# Live (requires the daemon up and kube context = nautilus):
-uv run python nrp/scripts/submit_sobol.py --n-base-samples 8192
+uv run python nrp/scripts/_submit_backfill.py --dry-run --n-base-samples 8192
 ```
 
-This launches the 100-partition backfill of `sobol_chunk_results`
-(fan-out to ~100 parallel Jobs, `max_concurrent: 100`) then
-`sobol_aggregate`. Acceptance target: < 1 h wall-time. Monitor via the
-UI or `kubectl get jobs -n ucsd-center4health -w`.
+Prints the parameter count, total samples (`N*(D+2) = 106,496`),
+partition layout (100 chunks, ~1,065 rows each), and the seed —
+without touching the cluster.
 
-Retrieve:
+### 6b. Submit the backfill
+
+Start a port-forward, then submit via the GraphQL API:
 
 ```bash
-uv run python nrp/scripts/fetch_sobol_results.py     # auto-detects S3 (DAGSTER_S3_BUCKET set)
+kubectl port-forward svc/dagster-dagster-webserver 3000:80 -n ucsd-center4health &
+sleep 3
+uv run python nrp/scripts/_submit_backfill.py --n-base-samples 8192
+kill %1 2>/dev/null
+```
+
+The `--n-base-samples` flag (default 8192) controls the SALib base N;
+the run config is passed via the GraphQL mutation so on-cluster runs
+use the requested sample count instead of the tiny default (16) in
+the asset definition. Use `--seed` to change the RNG seed (default 42).
+
+The script prints the backfill ID (e.g. `nvntbbst`). Save it for
+monitoring.
+
+### 6c. Monitor progress
+
+**Quick kubectl check** (job-level):
+```bash
+kubectl get jobs -n ucsd-center4health --no-headers | awk '{print $2}' | sort | uniq -c
+```
+
+**GraphQL monitor** (partition-level):
+```bash
+kubectl port-forward svc/dagster-dagster-webserver 3000:80 -n ucsd-center4health &
+sleep 3
+uv run python nrp/scripts/_monitor_backfill.py <backfill_id>
+kill %1 2>/dev/null
+```
+
+**Dagster UI**: port-forward and open `http://127.0.0.1:3000` →
+Backfills tab → select the backfill ID.
+
+Typical run: ~100 K8s Jobs, most complete in 50–90s, a few long-tail
+partitions take up to ~25 min. Total wall-time ~30 min.
+
+### 6d. Clean up failed jobs (if any)
+
+```bash
+kubectl delete jobs --field-selector status.successful=0 -n ucsd-center4health
+```
+
+### 6e. Submit the aggregation
+
+After all 100 partitions of `sobol_chunk_results` complete, trigger
+`sobol_aggregate` via the Dagster UI, or:
+
+```bash
+kubectl port-forward svc/dagster-dagster-webserver 3000:80 -n ucsd-center4health &
+sleep 3
+uv run python -c "
+import requests, json
+resp = requests.post('http://localhost:3000/graphql', json={'query': '''
+mutation {
+  launchPartitionBackfill(backfillParams: {
+    assetSelection: [{ path: [\"sobol_aggregate\"] }],
+    partitionNames: []
+  }) {
+    ... on LaunchBackfillSuccess { backfillId }
+    ... on PythonError { message }
+  }
+}'''})
+print(json.dumps(resp.json(), indent=2))
+"
+kill %1 2>/dev/null
+```
+
+### 6f. Retrieve results
+
+```bash
+source nrp/.env
+uv run python nrp/scripts/fetch_sobol_results.py
 # → experiments/2026-05-15_sobol_full/output/sobol_indices.csv
 ```
 
-Then write up full-scale findings vs the 200-sample LHS Pearson
-approximation in `experiments/2026-05-15_sobol_full/RESULTS.md`.
+Then write up findings in `experiments/2026-05-15_sobol_full/RESULTS.md`.
 
-## 7. Standing decisions still needing a human (issue "Things to figure out")
+## 7. Lessons learned (2026-05-20/21 deployment)
 
-- **Storage class / quota**: confirm the namespace can run 100
-  concurrent pods (CPU/mem requests in `_WORKER_K8S_TAGS`:
-  500m/1Gi req, 1/2Gi lim → ~50 CPU, ~100Gi at peak). If quota is
-  lower, drop `max_concurrent` (still correct, just slower).
-- **Registry**: `registry.nrp-nautilus.io` (assumed here) vs GHCR with
-  an imagePullSecret.
-- **Object store**: `oss.resilientservice.mooo.com` (verified) vs an
-  NRP-native CephFS-backed S3 — current bucket `tj-calibration` works.
+- **Registry URL**: `gitlab-registry.nrp-nautilus.io`, not
+  `registry.nrp-nautilus.io` (which 404s). The NRP docs confirm this.
+- **Platform**: Always build with `--platform linux/amd64` on Apple
+  Silicon. NRP nodes are amd64.
+- **`dagster-postgres`**: Required in `pyproject.toml` dependencies.
+  Without it, K8s run pods fail at startup trying to connect to the
+  Dagster Postgres instance.
+- **imagePullSecrets**: The GitLab registry requires authentication.
+  Create a `docker-registry` secret and reference it in both
+  top-level `imagePullSecrets` and `dagster-user-deployments.imagePullSecrets`.
+- **Resource limits**: NRP enforces Gatekeeper policies. All containers
+  must have CPU+memory requests and memory limits. CPU requests must
+  not exceed CPU limits.
+- **Postgres**: Use the chart's built-in Bitnami PostgreSQL
+  (`postgresql.enabled: true`). Point `global.postgresqlSecretName`
+  to `dagster-postgresql` (the auto-created secret name).
+- **Backfill submission**: The `dg launch` CLI cannot submit
+  multi-partition backfills. Use the GraphQL API via
+  `nrp/scripts/_submit_backfill.py`.
 
 ## 8. Teardown
 
-`helm uninstall dagster -n ucsd-center4health` removes the runtime;
-Jobs are owned by their runs and GC per Dagster config. Artifacts in
-`s3://tj-calibration` persist (intentional — that's the result store).
+```bash
+helm uninstall dagster -n ucsd-center4health
+```
+
+Removes the runtime; Jobs are owned by their runs and GC per Dagster
+config. Artifacts in `s3://tj-calibration` persist (intentional —
+that's the result store).

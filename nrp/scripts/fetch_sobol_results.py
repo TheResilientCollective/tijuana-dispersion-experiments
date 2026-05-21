@@ -1,5 +1,4 @@
-"""
-Fetch the Sobol aggregator's indices to a local experiment folder.
+"""Fetch the Sobol aggregator's indices to a local experiment folder.
 
 The ``sobol_aggregate`` asset persists via the IO manager:
 - on NRP: S3 at ``s3://<bucket>/dagster/runs/<run_id>/sobol_aggregate*``
@@ -47,7 +46,7 @@ def _load_local(io_dir: Path) -> pd.DataFrame:
     if not candidates:
         raise FileNotFoundError(
             f"No sobol_aggregate output under {io_dir}. Materialise it first "
-            "(`uv run dg launch --assets sobol_aggregate`)."
+            "(`uv run dg launch --assets sobol_aggregate`).",
         )
     newest = max(candidates, key=lambda p: p.stat().st_mtime)
     with newest.open("rb") as f:

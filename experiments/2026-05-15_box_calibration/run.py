@@ -1,5 +1,4 @@
-"""
-Calibrate the calm-night stagnation box against Berry's >100 ppb hours.
+"""Calibrate the calm-night stagnation box against Berry's >100 ppb hours.
 
 Context
 -------
@@ -146,7 +145,7 @@ def main() -> None:
                 "temperature_2m",
                 "cloud_cover",
                 "is_night",
-            ]
+            ],
         )
         .sort_values("time")
         .reset_index(drop=True)
@@ -242,7 +241,7 @@ def main() -> None:
     ev = berry[(berry.time >= "2026-05-10 18:00") & (berry.time <= "2026-05-11 08:00")]
     event_validation: dict[str, object]
     if len(ev) >= 3 and isinstance(res_op.get("e_local_g_s_star"), float):
-        e_star = cast(float, res_op["e_local_g_s_star"])
+        e_star = cast("float", res_op["e_local_g_s_star"])
         # Distribute the calibrated lumped E_local across the catalog
         # sources so the service's Σ-rate → box mapping reproduces it.
         per_src = e_star / len(srcs)
@@ -276,7 +275,7 @@ def main() -> None:
         )
         r_box = run_forward(ForwardRunRequest(**base_req, cache_key=None))
         r_gauss = run_forward(
-            ForwardRunRequest(**base_req, disable_regime_dispatch=True, cache_key=None)
+            ForwardRunRequest(**base_req, disable_regime_dispatch=True, cache_key=None),
         )
         c_box = np.array(r_box.concentrations)[:, 0]
         c_gauss = np.array(r_gauss.concentrations)[:, 0]

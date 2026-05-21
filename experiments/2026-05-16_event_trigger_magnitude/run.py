@@ -1,5 +1,4 @@
-"""
-Event-trigger magnitude: can an episodic trigger recover recall@100?
+"""Event-trigger magnitude: can an episodic trigger recover recall@100?
 
 Arc
 ---
@@ -87,7 +86,7 @@ BOOST_GRID = [3.0, 10.0, 30.0, 100.0, 300.0]
 
 
 def _clf(o: np.ndarray, p: np.ndarray) -> dict[str, float]:
-    """recall / precision / FPR / F1 / Youden-J at the 100 ppb line."""
+    """Recall / precision / FPR / F1 / Youden-J at the 100 ppb line."""
     hi_o, hi_p = o > THR, p > THR
     tp = int((hi_o & hi_p).sum())
     fp = int((~hi_o & hi_p).sum())
@@ -126,7 +125,7 @@ def main() -> None:
                 "temperature_2m",
                 "cloud_cover",
                 "is_night",
-            ]
+            ],
         )
         .sort_values("time")
         .reset_index(drop=True)
@@ -161,14 +160,17 @@ def main() -> None:
 
     # Unit temperature-led E_local (E0=1); box is linear in E0.
     e_temp_unit = temperature_led_e_local(
-        met, TemperatureEmissionParams(e0_g_s=1.0, q10=Q10, t_ref_c=T_REF_C)
+        met,
+        TemperatureEmissionParams(e0_g_s=1.0, q10=Q10, t_ref_c=T_REF_C),
     )
 
     def box_for(trigger_mult: np.ndarray) -> np.ndarray:
         return box_series(
             met,
             StagnationBoxParams(
-                tau_h=TAU_H, e_local_g_s=e_temp_unit * trigger_mult, area_m2=DEFAULT_AREA_M2
+                tau_h=TAU_H,
+                e_local_g_s=e_temp_unit * trigger_mult,
+                area_m2=DEFAULT_AREA_M2,
             ),
             units="ppb",
         )
@@ -195,7 +197,9 @@ def main() -> None:
         base = {**_clf(obs[te], base_pred[te]), "spearman": _rho(obs[te], base_pred[te])}
 
         def best_over(
-            features: list[str], tr: np.ndarray = tr, te: np.ndarray = te
+            features: list[str],
+            tr: np.ndarray = tr,
+            te: np.ndarray = te,
         ) -> dict[str, object]:
             best: dict[str, object] | None = None
             best_j_tr = -2.0
@@ -250,7 +254,7 @@ def main() -> None:
             f"prec={ex.get('test', {}).get('precision_at_100')} "
             f"(feat={ex.get('feature')}) | AUTOREGRESSIVE ceiling "
             f"recall={au.get('test', {}).get('recall_at_100')}, "
-            f"prec={au.get('test', {}).get('precision_at_100')}"
+            f"prec={au.get('test', {}).get('precision_at_100')}",
         )
     report["verdict"] = verdict
 

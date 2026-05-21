@@ -1,5 +1,4 @@
-"""
-Calibration experiment v2 — Mar 13-15, 2026.
+"""Calibration experiment v2 — Mar 13-15, 2026.
 
 Compared to demo_run.py:
   - Adds 12 distributed channel sources between Stewart's and the beach outlet
@@ -249,7 +248,7 @@ def build_met_series(df_window):
                     float(row["cloud_cover"]) / 100.0 if not pd.isna(row["cloud_cover"]) else 0.5
                 ),
                 is_night=bool(row["is_night"] >= 0.5) if not pd.isna(row["is_night"]) else False,
-            )
+            ),
         )
     return out
 
@@ -320,7 +319,7 @@ def main():
             "archetype": inv.archetypes,
             "rate_g_s": inv.fitted_rates_g_s,
             "bound_g_s": inv.upper_bounds_g_s,
-        }
+        },
     )
     print("Top fitted rates:")
     print(rate_df.nlargest(15, "rate_g_s").to_string(index=False))
@@ -348,7 +347,7 @@ def main():
             meteorology=met_specs,
             units="ppb",
             notes="calibration v2 fitted rates",
-        )
+        ),
     )
     pred = np.array(fwd.concentrations)
 
@@ -361,7 +360,7 @@ def main():
             corr = np.corrcoef(pred[valid, r_idx], obs[valid, r_idx])[0, 1]
         print(
             f"  {rname:<14}  pred_max={np.nanmax(pred[:, r_idx]):7.1f}  "
-            f"obs_max={np.nanmax(obs[:, r_idx]):7.1f}  r={corr:.2f}"
+            f"obs_max={np.nanmax(obs[:, r_idx]):7.1f}  r={corr:.2f}",
         )
     print()
 
@@ -377,8 +376,9 @@ def main():
         print(f"\n  {rname}")
         print(
             sub[["wind_sector", "n_hours", "obs_mean", "pred_mean", "resid_mean"]].to_string(
-                index=False, float_format=lambda x: f"{x:6.1f}"
-            )
+                index=False,
+                float_format=lambda x: f"{x:6.1f}",
+            ),
         )
     print()
 
@@ -392,7 +392,7 @@ def main():
             "hour": hours,
             **{f"obs_{r}": obs[:, i] for i, r in enumerate(receptor_names)},
             **{f"pred_{r}": pred[:, i] for i, r in enumerate(receptor_names)},
-        }
+        },
     )
     ts_df.to_csv(OUT_DIR / "timeseries.csv", index=False)
 
@@ -412,7 +412,7 @@ def main():
                 np.corrcoef(
                     pred[~np.isnan(obs[:, r_idx]), r_idx],
                     obs[~np.isnan(obs[:, r_idx]), r_idx],
-                )[0, 1]
+                )[0, 1],
             )
             if (~np.isnan(obs[:, r_idx])).sum() >= 5
             else None

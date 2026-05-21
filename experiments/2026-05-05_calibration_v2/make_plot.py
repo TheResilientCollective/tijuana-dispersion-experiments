@@ -23,7 +23,14 @@ colors = {"SAN YSIDRO": "#e74c3c", "NESTOR - BES": "#2ecc71", "IB CIVIC CTR": "#
 fig, axes = plt.subplots(3, 1, figsize=(11, 9), sharex=True)
 for ax, r in zip(axes, receptors, strict=False):
     ax.plot(
-        v2["hour"], v2[f"obs_{r}"], "o-", color=colors[r], lw=2, ms=4, label="observed", zorder=3
+        v2["hour"],
+        v2[f"obs_{r}"],
+        "o-",
+        color=colors[r],
+        lw=2,
+        ms=4,
+        label="observed",
+        zorder=3,
     )
     ax.plot(
         v1["hour"],

@@ -6,7 +6,7 @@
 # Build (BuildKit required for the --mount=type=secret line):
 #   DOCKER_BUILDKIT=1 docker build -f nrp/Dockerfile \
 #     --secret id=gh_token,env=GH_TOKEN \
-#     -t registry.nrp-nautilus.io/ucsd-center4health/nrp-worker:<tag> .
+#     -t gitlab-registry.nrp-nautilus.io/ucsd-center4health/nrp-worker:<tag> .
 #   GH_TOKEN must read the (currently-private) tijuana-dispersion repo
 #   so `--extra service` resolves; the token is mounted, never layered.
 #

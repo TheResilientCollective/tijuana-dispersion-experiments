@@ -1,5 +1,4 @@
-"""
-Sensitivity analysis on the emissions model parameters.
+"""Sensitivity analysis on the emissions model parameters.
 
 A miniature illustration of the kind of compute-rich calibration NRP
 would enable at scale. Latin Hypercube samples 11 emission parameters
@@ -129,7 +128,7 @@ def make_drivers_and_met(df_window):
                 else 0.0,
                 tide_height_m=float(row["tide_height"]) if not pd.isna(row["tide_height"]) else 0.0,
                 is_night=bool(row["is_night"] >= 0.5),
-            )
+            ),
         )
         met.append(
             MetCondition(
@@ -141,7 +140,7 @@ def make_drivers_and_met(df_window):
                 if not pd.isna(row["cloud_cover"])
                 else 0.5,
                 is_night=bool(row["is_night"] >= 0.5),
-            )
+            ),
         )
     return drivers, met
 
@@ -275,7 +274,7 @@ def main():
                     "metric": mcol,
                     "pearson_r": float(r),
                     "abs_r": abs(float(r)),
-                }
+                },
             )
     sens = pd.DataFrame(sens_rows)
     sens.to_csv(OUT / "sensitivities.csv", index=False)
@@ -297,7 +296,7 @@ def main():
                 "diel_amplitude",
                 *rms_cols,
             ]
-        ].to_string(index=False, float_format=lambda x: f"{x:7.2f}")
+        ].to_string(index=False, float_format=lambda x: f"{x:7.2f}"),
     )
     print()
 
@@ -325,7 +324,7 @@ def main():
                 "per_receptor_corr": {r: float(best.iloc[0][f"corr_{r}"]) for r in receptor_names},
             },
             indent=2,
-        )
+        ),
     )
     print(f"Best parameters saved to {OUT / 'best_parameters.json'}")
     print(f"Full sample results: {OUT / 'sensitivity_samples.csv'}")

@@ -1,5 +1,4 @@
-"""
-Dagster pipeline for NRP-side calibration workloads.
+"""Dagster pipeline for NRP-side calibration workloads.
 
 Asset graph:
 
@@ -86,9 +85,9 @@ _WORKER_K8S_TAGS = {
             "resources": {
                 "requests": {"cpu": "500m", "memory": "1Gi"},
                 "limits": {"cpu": "1", "memory": "2Gi"},
-            }
-        }
-    }
+            },
+        },
+    },
 }
 
 _AGGREGATOR_K8S_TAGS = {
@@ -97,9 +96,9 @@ _AGGREGATOR_K8S_TAGS = {
             "resources": {
                 "requests": {"cpu": "1", "memory": "4Gi"},
                 "limits": {"cpu": "2", "memory": "8Gi"},
-            }
-        }
-    }
+            },
+        },
+    },
 }
 
 
@@ -136,7 +135,8 @@ def _parquet_path(cfg: SobolConfig) -> Path:
     io_manager_key="s3_io",
 )
 def sobol_chunk_results(
-    context: AssetExecutionContext, config: SobolConfig
+    context: AssetExecutionContext,
+    config: SobolConfig,
 ) -> dg.MaterializeResult:
     """Evaluate this chunk's slice of the Sobol sample matrix.
 
@@ -152,7 +152,11 @@ def sobol_chunk_results(
     bounds = sobol.chunk_bounds(samples.shape[0], N_SOBOL_CHUNKS)
     start, end = bounds[chunk_idx]
     log.info(
-        "sobol chunk %s: rows [%d, %d) of %d", context.partition_key, start, end, samples.shape[0]
+        "sobol chunk %s: rows [%d, %d) of %d",
+        context.partition_key,
+        start,
+        end,
+        samples.shape[0],
     )
 
     if start == end:
@@ -200,11 +204,12 @@ def sobol_chunk_results(
         "chunks": dg.AssetIn(
             "sobol_chunk_results",
             partition_mapping=dg.AllPartitionMapping(),
-        )
+        ),
     },
 )
 def sobol_aggregate(
-    context: AssetExecutionContext, chunks: dict[str, dict[str, Any]]
+    context: AssetExecutionContext,
+    chunks: dict[str, dict[str, Any]],
 ) -> dg.MaterializeResult:
     """Reassemble all chunk outputs in sample order and run SALib Sobol.
 
@@ -238,7 +243,7 @@ def sobol_aggregate(
         f":bar_chart: Sobol sensitivity complete (run {context.run_id[:8]})\n"
         f"Samples: {asm['n_samples']} | metrics: {len(frames)}\n"
         f"Top total-order sensitivity: {top['parameter']} "
-        f"(S_T={top['ST']:.3f} on {top['metric']})"
+        f"(S_T={top['ST']:.3f} on {top['metric']})",
     )
 
     return dg.MaterializeResult(
@@ -251,7 +256,7 @@ def sobol_aggregate(
             "top_ST": float(top["ST"]),
             "top_metric": str(top["metric"]),
             "indices_preview": dg.MetadataValue.md(
-                indices.sort_values("ST", ascending=False).head(10).to_markdown(index=False)
+                indices.sort_values("ST", ascending=False).head(10).to_markdown(index=False),
             ),
         },
     )
@@ -333,7 +338,7 @@ def nrp_run_failure_to_slack(context: RunFailureSensorContext) -> None:
         f"Job: {run.job_name}\n"
         f"Run ID: {run.run_id[:8]}\n"
         f"Error: {error_msg}\n"
-        f"Dagster UI: <see Dagster instance>"
+        f"Dagster UI: <see Dagster instance>",
     )
 
 
@@ -399,7 +404,7 @@ defs = dg.Definitions(
                 base_dir=os.getenv(
                     "DAGSTER_LOCAL_IO_DIR",
                     str(Path(__file__).resolve().parent.parent / ".dagster_io"),
-                )
+                ),
             )
         ),
         # Slack webhook sender. Reuses the same env vars as the existing
@@ -422,9 +427,9 @@ defs = dg.Definitions(
             "service_account_name": "dagster-nrp",
             "max_concurrent": 100,
             "load_incluster_config": os.path.exists(
-                "/var/run/secrets/kubernetes.io/serviceaccount/token"
+                "/var/run/secrets/kubernetes.io/serviceaccount/token",
             ),
-        }
+        },
     )
     if os.getenv("KUBERNETES_SERVICE_HOST")
     else dg.multiprocess_executor,

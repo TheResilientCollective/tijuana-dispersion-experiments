@@ -1,5 +1,4 @@
-"""
-Local reduced-N Sobol run (issue #2).
+"""Local reduced-N Sobol run (issue #2).
 
 Exercises the *same* science as the NRP pipeline
 (`nrp/sobol.py`) without Dagster/K8s, at a small base-N so it finishes
@@ -67,8 +66,8 @@ def main() -> None:
                 "param_names": problem["names"],
                 "metric_columns": sobol.OUTPUT_COLUMNS,
                 "rows": rows,
-            }
-        }
+            },
+        },
     )
     frames = []
     for metric, y in asm["y_by_metric"].items():

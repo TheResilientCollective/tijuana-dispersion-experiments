@@ -1,5 +1,4 @@
-"""
-Experiment entry point.
+"""Experiment entry point.
 
 Loads `config.yaml`, runs the experiment, writes outputs to `outputs/`,
 updates RESULTS.md with key numbers (or leaves the human to write the

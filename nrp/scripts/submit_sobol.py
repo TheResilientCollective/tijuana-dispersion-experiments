@@ -1,5 +1,4 @@
-"""
-Submit the full-scale Sobol sensitivity workload to NRP.
+"""Submit the full-scale Sobol sensitivity workload to NRP.
 
 Per AGENTS.md NRP submission rules:
 - Always accepts ``--dry-run``; the first call for a new workload must
@@ -58,9 +57,9 @@ def main() -> int:
     run_config = {
         "ops": {
             "sobol_chunk_results": {
-                "config": {"n_base_samples": args.n_base_samples, "seed": args.seed}
-            }
-        }
+                "config": {"n_base_samples": args.n_base_samples, "seed": args.seed},
+            },
+        },
     }
 
     print("=== Sobol submission plan ===")
@@ -95,7 +94,7 @@ def main() -> int:
         print(
             "\n[dry-run] NOT submitted. Resolve the open infra questions in "
             "nrp/README.md (namespace, object store, registry) and ensure a "
-            "Dagster daemon + NRP kube context before a live run."
+            "Dagster daemon + NRP kube context before a live run.",
         )
         return 0
 

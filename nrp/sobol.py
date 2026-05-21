@@ -1,5 +1,4 @@
-"""
-Sobol sensitivity — science core (issue #2).
+"""Sobol sensitivity — science core (issue #2).
 
 This module is the pure, framework-agnostic science for the first NRP
 workload. It is imported by the Dagster pipeline (``dagster_pipeline.py``)
@@ -144,6 +143,7 @@ def build_samples(n_base: int, seed: int = 42) -> np.ndarray:
     -------
     np.ndarray
         Shape ``(N * (D + 2), D)``.
+
     """
     return sobol_sample.sample(build_problem(), n_base, calc_second_order=False, seed=seed)
 
@@ -169,13 +169,14 @@ def load_window(parquet_path: Path, window: tuple[str, str]) -> pd.DataFrame:
     FileNotFoundError
         If the parquet is absent. Per AGENTS.md we never substitute
         synthetic data when the real input is missing.
+
     """
     if not parquet_path.exists():
         raise FileNotFoundError(
             f"H2S data not found at {parquet_path}. Run "
             "`python scripts/fetch_data.py --only modeldata_h2s_nofill` "
             "(local) or bake it into the worker image (NRP). Refusing to "
-            "fabricate observations."
+            "fabricate observations.",
         )
     df = pd.read_parquet(parquet_path)
     df["time"] = pd.to_datetime(df["time"], utc=True).dt.tz_convert("America/Los_Angeles")
@@ -230,7 +231,7 @@ def make_drivers_and_met(
                 else 0.0,
                 tide_height_m=float(row["tide_height"]) if pd.notna(row["tide_height"]) else 0.0,
                 is_night=is_night,
-            )
+            ),
         )
         met.append(
             MetSpec(
@@ -242,7 +243,7 @@ def make_drivers_and_met(
                 if pd.notna(row["cloud_cover"])
                 else 0.5,
                 is_night=is_night,
-            )
+            ),
         )
         hours.append(row["hour"])
     return drivers, met, pd.DatetimeIndex(hours)
@@ -322,7 +323,7 @@ def evaluate_sample(
                 receptors=receptors,
                 meteorology=[met[t_idx]],
                 units="ppb",
-            )
+            ),
         )
         pred[t_idx] = np.asarray(res.concentrations)[0]
 
@@ -367,6 +368,7 @@ def reassemble(chunks: dict[str, dict[str, Any]]) -> dict[str, Any]:
     ValueError
         If no samples are present, or the reassembled matrix has gaps —
         a partial matrix would make the Sobol analysis silently invalid.
+
     """
     non_empty = [c for c in chunks.values() if c.get("rows")]
     if not non_empty:
@@ -388,7 +390,7 @@ def reassemble(chunks: dict[str, dict[str, Any]]) -> dict[str, Any]:
         raise ValueError(
             f"Sobol matrix incomplete: {missing}/{total} sample rows missing — "
             "a partial matrix yields an invalid Sobol analysis. Ensure all "
-            "sobol_chunk_results partitions materialised."
+            "sobol_chunk_results partitions materialised.",
         )
     return {
         "param_names": param_names,
@@ -412,5 +414,5 @@ def analyze(problem: dict[str, Any], y: np.ndarray) -> pd.DataFrame:
             "S1_conf": res["S1_conf"],
             "ST": res["ST"],
             "ST_conf": res["ST_conf"],
-        }
+        },
     )

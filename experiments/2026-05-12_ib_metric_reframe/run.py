@@ -1,5 +1,4 @@
-"""
-IB metric-reframe: recompute the v3.x family's holdout fit under
+"""IB metric-reframe: recompute the v3.x family's holdout fit under
 Pearson, Spearman, and log-Pearson — no refitting.
 
 Reads the committed timeseries_holdout.csv from each prior experiment
@@ -103,7 +102,7 @@ def main() -> None:
                             "metric": metric_name,
                             "value": round(val, 4),
                             "n": mt["n"],
-                        }
+                        },
                     )
 
     out = pd.DataFrame(rows)

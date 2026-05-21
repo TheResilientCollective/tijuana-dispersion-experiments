@@ -1,0 +1,171 @@
+{
+  "experiment": "calibration_v3_1",
+  "run_date": "2026-05-12T01:09:48.478661",
+  "quick_mode": false,
+  "windows": {
+    "train": {
+      "start": "2026-02-01T00:00:00",
+      "end": "2026-04-01T00:00:00"
+    },
+    "holdout": {
+      "start": "2026-04-01T00:00:00",
+      "end": "2026-04-15T00:00:00"
+    }
+  },
+  "n_sources": 40,
+  "n_obs_train": 3739,
+  "n_obs_holdout": 919,
+  "v2": {
+    "rms_train": 28.839960598664373,
+    "train_metrics": {
+      "SAN YSIDRO": {
+        "r": 0.2844821641538256,
+        "rms": 11.911922663508703,
+        "peak_ratio": 0.44720693977396925,
+        "n": 1343
+      },
+      "NESTOR - BES": {
+        "r": 0.38284021002001245,
+        "rms": 49.812287895809895,
+        "peak_ratio": 0.5526140783079034,
+        "n": 1085
+      },
+      "IB CIVIC CTR": {
+        "r": 0.14659703596011694,
+        "rms": 13.163100644386011,
+        "peak_ratio": 1.8600645512723315,
+        "n": 1311
+      }
+    },
+    "holdout_metrics": {
+      "SAN YSIDRO": {
+        "r": 0.09172182523439733,
+        "rms": 13.173896699964157,
+        "peak_ratio": 0.3030854161487182,
+        "n": 304
+      },
+      "NESTOR - BES": {
+        "r": 0.20018280632397498,
+        "rms": 84.51178629883196,
+        "peak_ratio": 0.16516416323256983,
+        "n": 309
+      },
+      "IB CIVIC CTR": {
+        "r": 0.08434028757284362,
+        "rms": 25.544356112576452,
+        "peak_ratio": 1.7907854263477205,
+        "n": 306
+      }
+    },
+    "san_ysidro_wsw_residual_holdout": 1.390818614066972,
+    "san_ysidro_north_residual_holdout": 11.818060167347891
+  },
+  "v3": {
+    "diel_amplitude": 1.8469482421875023,
+    "diel_phase_hours": 4.0427734374999975,
+    "rms_train": 28.649883225799325,
+    "train_metrics": {
+      "SAN YSIDRO": {
+        "r": 0.32583608231112143,
+        "rms": 11.690557383079522,
+        "peak_ratio": 0.5453817801818014,
+        "n": 1343
+      },
+      "NESTOR - BES": {
+        "r": 0.3957993030033235,
+        "rms": 49.52027777773992,
+        "peak_ratio": 0.6319868084694288,
+        "n": 1085
+      },
+      "IB CIVIC CTR": {
+        "r": 0.16772354708164894,
+        "rms": 13.094266901719243,
+        "peak_ratio": 1.5749791270787157,
+        "n": 1311
+      }
+    },
+    "holdout_metrics": {
+      "SAN YSIDRO": {
+        "r": 0.11352374615042705,
+        "rms": 13.185735881876504,
+        "peak_ratio": 0.3532963721415901,
+        "n": 304
+      },
+      "NESTOR - BES": {
+        "r": 0.2110332032974558,
+        "rms": 84.35879828128931,
+        "peak_ratio": 0.16375817552950636,
+        "n": 309
+      },
+      "IB CIVIC CTR": {
+        "r": 0.08558583166882669,
+        "rms": 28.37306858493235,
+        "peak_ratio": 2.318996091419254,
+        "n": 306
+      }
+    },
+    "san_ysidro_wsw_residual_holdout": 1.8103747852559713,
+    "san_ysidro_north_residual_holdout": 11.789898933769729,
+    "n_outer_eval": 22,
+    "outer_loss": 0.9314064472417657
+  },
+  "v3_1": {
+    "diel_amplitude_land": 1.714177715683142,
+    "diel_amplitude_water": 3.4904622088930948,
+    "diel_phase_hours": 4.227439226026908,
+    "rms_train": 28.633859043211178,
+    "train_metrics": {
+      "SAN YSIDRO": {
+        "r": 0.3248538541647898,
+        "rms": 11.698454149023341,
+        "peak_ratio": 0.5397950907382372,
+        "n": 1343
+      },
+      "NESTOR - BES": {
+        "r": 0.3970951733850231,
+        "rms": 49.492909382495995,
+        "peak_ratio": 0.6237276960525059,
+        "n": 1085
+      },
+      "IB CIVIC CTR": {
+        "r": 0.1786963127418412,
+        "rms": 13.072695539373278,
+        "peak_ratio": 1.605828672645048,
+        "n": 1311
+      }
+    },
+    "holdout_metrics": {
+      "SAN YSIDRO": {
+        "r": 0.11543944981244297,
+        "rms": 13.18771545484596,
+        "peak_ratio": 0.37033483273102846,
+        "n": 304
+      },
+      "NESTOR - BES": {
+        "r": 0.20858219426306496,
+        "rms": 84.37783201975627,
+        "peak_ratio": 0.16366240615391722,
+        "n": 309
+      },
+      "IB CIVIC CTR": {
+        "r": 0.08699983384771028,
+        "rms": 28.141671301470957,
+        "peak_ratio": 2.282867953883838,
+        "n": 306
+      }
+    },
+    "san_ysidro_wsw_residual_holdout": 1.7068996776433754,
+    "san_ysidro_north_residual_holdout": 11.794377448002843,
+    "n_outer_eval": 68,
+    "outer_loss": 0.9300690157401531,
+    "ne_candidate_rates_g_s": {
+      "Otay Mesa Industrial S": 0.2950365493070174,
+      "Otay Mesa Industrial N": 0.37302384014211826
+    }
+  },
+  "acceptance_v31_vs_v3": {
+    "sy_holdout_r_v31_vs_v3": 0.001915703662015919,
+    "north_residual_reduction_pct_v31_vs_v2": 0.20039430337713826,
+    "wsw_residual_reduction_pct_v31_vs_v2": -22.726260662569974
+  }
+}

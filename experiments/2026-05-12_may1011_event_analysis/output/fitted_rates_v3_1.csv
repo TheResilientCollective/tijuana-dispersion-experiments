@@ -1,0 +1,56 @@
+name,archetype,rate_g_s
+Stewart's Drain,drain,0.06792964651550656
+Smuggler's Gulch,drain,0.7499274188529426
+Hollister St PS,drain,3.095415293758905
+Goat Canyon,drain,0.27358134132039297
+Goat Canyon PS,drain,0.7360380748717147
+Del Sol Canyon,drain,9.020593475509014e-88
+Silva Drain,drain,0.06592072516212427
+Saturn Blvd Bridge,channel,0.5355615045056364
+Hollister St Bridge N,channel,1.2102957351917759e-90
+Hollister St Bridge S,channel,0.0837837219516352
+Dairy Mart Bridge,channel,0.12045732941859755
+Oneonta Slough Near IB,estuary,0.15146069929235872
+Tijuana River Beach Outlet,estuary,0.13748108885919655
+Tijuana River Crossing CDLP W,channel,0.15536498261487747
+Tijuana River Crossing CDLP E,channel,0.29198964539841066
+San Diego Bay ponds Otay River Outlet,bay,0.37631066480679576
+San Diego Bay Ponds near Fruitdale,bay,0.15173114369135524
+channel_00,channel,0.034808235636809584
+channel_01,channel,0.7761376498721829
+channel_02,channel,5.680831686842943e-80
+channel_03,channel,7.654399912984016e-84
+channel_04,channel,0.2730475607008187
+channel_05,channel,1.1521890755328559e-80
+channel_06,channel,0.7503770281977772
+channel_07,channel,0.6967814789113018
+channel_08,channel,0.07155302069894849
+channel_09,channel,0.1417899428114853
+channel_10,channel,1.932910388301099e-84
+channel_11,channel,0.10827340595579346
+estuary_00,estuary,0.04970199012547766
+estuary_01,estuary,0.12310925462472411
+estuary_02,estuary,0.6428063808097796
+estuary_03,estuary,4.527839539413356e-72
+estuary_04,estuary,0.006806496956311686
+estuary_05,estuary,0.01842969745968345
+estuary_06,estuary,5.230205766029192e-14
+estuary_07,estuary,6.753998894694278e-20
+estuary_08,estuary,0.01528828675135876
+ne00,northeast,0.06857905995942842
+ne01,northeast,0.007089740241560081
+ne02,northeast,0.10747334602137999
+ne10,northeast,2.5687856638722305e-79
+ne11,northeast,0.2507535225776239
+ne12,northeast,0.04609746414647603
+ne20,northeast,0.2269235767509513
+ne21,northeast,0.29808121582961233
+ne22,northeast,0.1488702110075368
+ne30,northeast,0.23014905775445782
+ne31,northeast,0.14827623636278517
+ne32,northeast,0.03381407149693222
+syW,sy_nearfield,2.2620949278921133e-88
+syWNW,sy_nearfield,0.12582455975861906
+syNW,sy_nearfield,0.09054175286484938
+syE,sy_nearfield,0.009310096571663318
+syS,sy_nearfield,0.016758949041183385

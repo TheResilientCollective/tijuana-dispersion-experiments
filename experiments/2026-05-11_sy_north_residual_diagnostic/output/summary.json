@@ -1,0 +1,12 @@
+{
+  "san_ysidro_n_sector_mean_ppb": 30.311111111111114,
+  "san_ysidro_nnw_sector_mean_ppb": 29.328571428571426,
+  "nestor_n_sector_mean_ppb": 13.411111111111111,
+  "sy_uniquely_elevated_in_n_sector": true,
+  "n_hours_sy_gt10_with_north_wind": 19,
+  "n_hours_nestor_gt50": 54,
+  "nestor_heavy_nocturnal_fraction": 1.0,
+  "v3_bay_source_hit_bound": true,
+  "v3_n_sources_at_bound": 1,
+  "design_implication_for_v3_1": "Two binding findings: (1) the bay archetype cap is the limiting constraint \u2014 relaxing it lets the NNLS attribute mass to bay-pond sources that align with N-wind NESTOR peaks; (2) the SY-N elevation is genuinely SY-specific (30 ppb vs NESTOR's 13 ppb in the N sector), so a missing source N/NE of SY is plausible in addition to the bay-cap fix."
+}

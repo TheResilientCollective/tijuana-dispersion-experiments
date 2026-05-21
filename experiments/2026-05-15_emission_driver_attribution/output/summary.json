@@ -1,0 +1,103 @@
+{
+  "n_berry_hours": 12964,
+  "n_berry_gt100": 242,
+  "box_ceiling_to_beat_heldout_spearman": {
+    "is_stagnation": 0.127,
+    "stable_atm": 0.218
+  },
+  "split": "chronological 70/30 (matches box_calibration)",
+  "is_stagnation": {
+    "n_test_regime_hours": 543,
+    "n_train_regime_hours": 1355,
+    "exogenous_driver_spearman_heldout": {
+      "temperature_2m": 0.3256,
+      "surface_pressure": -0.2088,
+      "precipitation": -0.1754,
+      "tide_height": 0.1568,
+      "sbiwtp_flow_x_temp": 0.1068,
+      "sbiwtp_flow_mgd": -0.0865,
+      "flow_log": 0.0828,
+      "Flow (m^3/s)--Border": 0.0828,
+      "flow_rolling_24h": 0.0607,
+      "sbiwtp_sli": -0.0574,
+      "sbiwtp_hourly_mgd": -0.0539,
+      "wind_temp_interaction": 0.0477,
+      "flow_lag_6h": 0.0288,
+      "sbiwtp_deficit": -0.012,
+      "sbiwtp_anomaly": -0.0062,
+      "relative_humidity_2m": 0.0028
+    },
+    "autoregressive_REFERENCE_ONLY_not_a_driver": {
+      "h2s_rolling_6h": 0.6986,
+      "h2s_lag_1h": 0.6982,
+      "h2s_rolling_24h": 0.5517,
+      "h2s_lag_3h": 0.2424,
+      "h2s_lag_6h": -0.1104
+    },
+    "shipped_emissions_form_unfitted_spearman": 0.0218,
+    "fitted_top6_exogenous_upperbound_spearman": 0.1568,
+    "fitted_upperbound_drivers": [
+      "temperature_2m",
+      "surface_pressure",
+      "precipitation",
+      "tide_height",
+      "sbiwtp_flow_x_temp",
+      "sbiwtp_flow_mgd"
+    ],
+    "beats_constant_box_ceiling": {
+      "ceiling": 0.127,
+      "best_single_exogenous": 0.3256,
+      "emissions_form_unfitted_beats": false,
+      "fitted_upperbound_beats": true
+    }
+  },
+  "stable_atm": {
+    "n_test_regime_hours": 1333,
+    "n_train_regime_hours": 3015,
+    "exogenous_driver_spearman_heldout": {
+      "temperature_2m": 0.3351,
+      "surface_pressure": -0.2348,
+      "precipitation": -0.1687,
+      "sbiwtp_flow_mgd": -0.11,
+      "sbiwtp_flow_x_temp": 0.0941,
+      "wind_temp_interaction": -0.0834,
+      "sbiwtp_hourly_mgd": -0.0819,
+      "sbiwtp_sli": -0.0549,
+      "tide_height": 0.0495,
+      "flow_rolling_24h": 0.0482,
+      "flow_lag_6h": -0.0357,
+      "sbiwtp_anomaly": -0.0125,
+      "flow_log": 0.0091,
+      "Flow (m^3/s)--Border": 0.0091,
+      "relative_humidity_2m": 0.0021,
+      "sbiwtp_deficit": -0.0002
+    },
+    "autoregressive_REFERENCE_ONLY_not_a_driver": {
+      "h2s_rolling_6h": 0.7332,
+      "h2s_lag_1h": 0.7254,
+      "h2s_rolling_24h": 0.5767,
+      "h2s_lag_3h": 0.3098,
+      "h2s_lag_6h": 0.0148
+    },
+    "shipped_emissions_form_unfitted_spearman": -0.1138,
+    "fitted_top6_exogenous_upperbound_spearman": -0.2348,
+    "fitted_upperbound_drivers": [
+      "temperature_2m",
+      "surface_pressure",
+      "precipitation",
+      "sbiwtp_flow_mgd",
+      "sbiwtp_flow_x_temp",
+      "wind_temp_interaction"
+    ],
+    "beats_constant_box_ceiling": {
+      "ceiling": 0.218,
+      "best_single_exogenous": 0.3351,
+      "emissions_form_unfitted_beats": false,
+      "fitted_upperbound_beats": true
+    }
+  },
+  "verdict": [
+    "[is_stagnation] ceiling=0.127 | best single exo=0.326 | emissions-form(unfitted)=0.022 | fitted upper bound=0.157 | upper-bound clears ceiling: True",
+    "[stable_atm] ceiling=0.218 | best single exo=0.335 | emissions-form(unfitted)=-0.114 | fitted upper bound=-0.235 | upper-bound clears ceiling: True"
+  ]
+}

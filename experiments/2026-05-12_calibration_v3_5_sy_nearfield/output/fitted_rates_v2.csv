@@ -1,0 +1,56 @@
+name,archetype,rate_g_s
+Stewart's Drain,drain,0.06469594507808174
+Smuggler's Gulch,drain,0.9944726319892743
+Hollister St PS,drain,3.745961680323063
+Goat Canyon,drain,0.3022559703319336
+Goat Canyon PS,drain,0.8625520105396542
+Del Sol Canyon,drain,2.2356208069206915e-40
+Silva Drain,drain,0.09411105143213039
+Saturn Blvd Bridge,channel,0.7752760190613374
+Hollister St Bridge N,channel,2.1557055386726513e-33
+Hollister St Bridge S,channel,0.13006639927464717
+Dairy Mart Bridge,channel,0.1798121587863918
+Oneonta Slough Near IB,estuary,0.12178848443018009
+Tijuana River Beach Outlet,estuary,0.17053747337038266
+Tijuana River Crossing CDLP W,channel,0.20499168492231057
+Tijuana River Crossing CDLP E,channel,0.32254367897352354
+San Diego Bay ponds Otay River Outlet,bay,0.9044686084425274
+San Diego Bay Ponds near Fruitdale,bay,0.3977775116495341
+channel_00,channel,0.10684750557338153
+channel_01,channel,1.0572685069375998
+channel_02,channel,4.866489358424365e-40
+channel_03,channel,1.010474999619458e-40
+channel_04,channel,0.39488599398243857
+channel_05,channel,5.415363615776806e-38
+channel_06,channel,1.0925760507927722
+channel_07,channel,0.9194966730555004
+channel_08,channel,0.10374814401230577
+channel_09,channel,0.23777121855014524
+channel_10,channel,2.6502218967883605e-35
+channel_11,channel,0.1716629274073748
+estuary_00,estuary,0.1333506642608562
+estuary_01,estuary,0.27282111156870886
+estuary_02,estuary,0.8721358824644074
+estuary_03,estuary,1.0070881745971337e-28
+estuary_04,estuary,0.02407791872020866
+estuary_05,estuary,0.061190101089164554
+estuary_06,estuary,0.0052069227945308405
+estuary_07,estuary,1.1216127055729828e-17
+estuary_08,estuary,0.027168943367097458
+ne00,northeast,0.09745706720847838
+ne01,northeast,0.014726756112582994
+ne02,northeast,0.36712615338461757
+ne10,northeast,4.8567344918190416e-39
+ne11,northeast,0.8856787419761785
+ne12,northeast,4.3186207793970167e-38
+ne20,northeast,0.3818335497131868
+ne21,northeast,0.724628025927348
+ne22,northeast,0.37428989461536766
+ne30,northeast,0.8718737459854176
+ne31,northeast,0.5347944302166947
+ne32,northeast,0.22999973082980393
+syW,sy_nearfield,2.875932560568966e-35
+syWNW,sy_nearfield,0.18766068116812445
+syNW,sy_nearfield,0.13561535990815873
+syE,sy_nearfield,0.01154060714223743
+syS,sy_nearfield,0.024898868325090247

@@ -1,0 +1,13 @@
+{
+  "n_berry_gt100": 242,
+  "stable_atm_frac_gt100": 0.876,
+  "stable_atm_frac_baseline": 0.331,
+  "event_dir_sweep_deg": 67.5,
+  "hour_to_hour_ddir_calm_night_deg": 28.9,
+  "hour_to_hour_ddir_windy_deg": 6.8,
+  "sy_vs_nestor_dir_diff_event_mean_deg": 20.8,
+  "sy_vs_nestor_dir_diff_event_max_deg": 52.2,
+  "gust_mean_ratio_gt100": 2.79,
+  "gust_mean_ratio_baseline": 2.88,
+  "verdict": "Supports explanation (b): calm-night Open-Meteo wind direction is unreliable for plume routing. The dataset's own stable_atm flag marks 88% of >100 ppb hours; direction is 4x noisier calm-night than windy and sweeps ~68 deg across the >100 ppb hours (~115 deg across the surrounding 20:00-05:00 calm window); SY vs NESTOR diverge up to ~52 deg in the same hours. Gust ratio was NOT discriminating. Cannot POSITIVELY confirm (a) vs (b) without an external anemometer (NERR/TJRTLMET) \u2014 recommend adding one to data/manifest.yaml. Actionable now: use the existing stable_atm flag as the stagnation classifier (service issues #2/#3)."
+}

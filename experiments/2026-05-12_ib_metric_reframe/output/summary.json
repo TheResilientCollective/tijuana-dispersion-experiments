@@ -1,0 +1,19 @@
+{
+  "experiment": "ib_metric_reframe",
+  "run_date": "2026-05-15T14:11:20.428310",
+  "headline": {
+    "ib_v32_pearson": 0.0867,
+    "ib_v32_spearman": 0.4693,
+    "ib_v32_log_pearson": 0.4456,
+    "nestor_v32_pearson": 0.2422,
+    "nestor_v32_spearman": 0.4978,
+    "sy_v32_pearson": 0.1997,
+    "sy_v32_spearman": 0.1649
+  },
+  "findings": {
+    "ib_problem_is_pearson_artifact": true,
+    "ib_no_independent_met": true,
+    "sy_pearson_flatters": true
+  },
+  "recommendation": "Adopt Spearman as the project's headline calibration metric for episodic H2S fits; keep Pearson + log-Pearson as secondary. Under Spearman, IB CIVIC CTR (0.47) fits about as well as NESTOR-BES (0.50); the long-standing 'IB is broken' belief was a heavy-tail Pearson artifact. Note the metric ordering is receptor-dependent \u2014 for SAN YSIDRO Pearson is the more generous metric, so report all three."
+}

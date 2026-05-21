@@ -1,0 +1,21 @@
+{
+  "parameters": {
+    "baseline_scale": 5.8080985023882254,
+    "Q10": 2.2714937415636816,
+    "T_ref_c": 21.32648071773216,
+    "substrate_alpha": 0.2989474438118756,
+    "substrate_threshold": 21.579931298934923,
+    "diel_amplitude": 1.2265972242466556,
+    "diel_phase_hours": 8.414455626984859,
+    "f_arch_drain": 1.3331524888221007,
+    "f_arch_channel": 1.1980551506766468,
+    "f_arch_estuary": 1.909730059236348,
+    "f_arch_bay": 0.14198420537639994
+  },
+  "combined_rms": 55.185535561937286,
+  "per_receptor_corr": {
+    "SAN YSIDRO": -0.11953933181544164,
+    "NESTOR - BES": -0.016628304352928593,
+    "IB CIVIC CTR": -0.15609758920986508
+  }
+}

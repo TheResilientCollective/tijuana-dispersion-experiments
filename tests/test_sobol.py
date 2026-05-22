@@ -249,6 +249,51 @@ def test_run_tag_is_deterministic() -> None:
     assert t == "2026-03-13_2026-03-16_N8192_seed42_2026-05-22"
 
 
+# ---------- bulk-windows YAML loader (submit_sobol.py --windows-file) ---------- #
+
+
+def test_load_windows_happy_path(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    p = tmp_path / "windows.yaml"
+    p.write_text(
+        "windows:\n"
+        "  - {start: '2026-03-13', end: '2026-03-16', note: 'advective'}\n"
+        "  - {start: '2026-05-10', end: '2026-05-12'}\n",
+    )
+    ws = sobol.load_windows(p)
+    assert len(ws) == 2
+    assert ws[0].start == "2026-03-13"
+    assert ws[0].note == "advective"
+    assert ws[1].note == ""  # optional
+
+
+def test_load_windows_rejects_missing_keys(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    p = tmp_path / "bad.yaml"
+    p.write_text("windows:\n  - {start: '2026-03-13'}\n")  # missing 'end'
+    with pytest.raises(ValueError, match="missing 'start' and/or 'end'"):
+        sobol.load_windows(p)
+
+
+def test_load_windows_rejects_empty(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    p = tmp_path / "empty.yaml"
+    p.write_text("windows: []\n")
+    with pytest.raises(ValueError, match="non-empty list"):
+        sobol.load_windows(p)
+
+
+def test_load_windows_rejects_no_top_key(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    p = tmp_path / "shape.yaml"
+    p.write_text("- start: '2026-03-13'\n  end: '2026-03-16'\n")  # list at top, not a mapping
+    with pytest.raises(ValueError, match="must be a mapping with a 'windows' list"):
+        sobol.load_windows(p)
+
+
+def test_load_windows_rejects_non_dict_item(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    p = tmp_path / "weird.yaml"
+    p.write_text("windows:\n  - 'just-a-string'\n")
+    with pytest.raises(ValueError, match=r"windows\[0\] must be a mapping"):
+        sobol.load_windows(p)
+
+
 # ---------- data-dependent integration check ---------- #
 
 

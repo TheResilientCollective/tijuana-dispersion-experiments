@@ -285,6 +285,50 @@ S3 mode auto-detects when `DAGSTER_S3_BUCKET` + `S3_ENDPOINT_URL` +
 AWS creds are all present. Pass `--force-local` to skip S3. Then
 write up findings in `experiments/2026-05-15_sobol_full/RESULTS.md`.
 
+### 6h. Bulk multi-window (one command, N windows sequential)
+
+Submit a list of fit windows in one invocation. Each runs in
+sequence: chunks backfill → poll → `sobol_aggregate_job` (aggregate +
+post-analysis) → poll → next. **Sequential by design**: the IO
+manager keys chunks by asset name only, so parallel windows would
+race-overwrite each other; the durable per-run archive at
+`s3://<bucket>/runs/<tag>/` preserves every window permanently.
+
+Author a `windows.yaml` (any name; check it into the experiment dir):
+
+```yaml
+# experiments/<new-exp>/windows.yaml
+windows:
+  - { start: "2026-03-13", end: "2026-03-16", note: "advective baseline" }
+  - { start: "2026-05-10", end: "2026-05-12", note: "calm-night Berry event" }
+  - { start: "2026-02-08", end: "2026-02-11", note: "winter storm" }
+```
+
+Then:
+
+```bash
+kubectl port-forward svc/dagster-dagster-webserver 3000:80 -n ucsd-center4health &
+sleep 3
+# Dry-run first — prints the full plan, archive tags, no submission:
+uv run python nrp/scripts/submit_sobol.py --windows-file windows.yaml --dry-run
+
+# Live (~30 min per window at N=8192 × 100 chunks):
+uv run python nrp/scripts/submit_sobol.py --windows-file windows.yaml
+kill %1 2>/dev/null
+```
+
+Each window produces a distinct archive at
+`s3://<bucket>/runs/{start}_{end}_N8192_seed42_{date}/`. The script
+polls Dagster every `--poll-interval` (default 30 s); use
+`--start-from N` to resume past a previously-completed window after a
+failure; pass `--continue-on-error` to keep going past a failed
+window. `--skip-aggregate` submits chunks only (for when you want to
+intervene before the aggregate runs).
+
+The end-of-run summary table lists every window with its terminal
+status and archive tag — copy the tags into `fetch_sobol_results.py
+--run-tag <tag>` to pull each result.
+
 ## 7. Lessons learned (2026-05-20/21 deployment)
 
 - **Registry URL**: `gitlab-registry.nrp-nautilus.io`, not

@@ -29,6 +29,7 @@ without the service. ``dg list defs`` likewise works service-free.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -553,6 +554,46 @@ def dropout_candidates(indices: pd.DataFrame, max_st_threshold: float = 0.02) ->
         return []
     max_st = indices.groupby("parameter")["ST"].max()
     return sorted(max_st[max_st < max_st_threshold].index.tolist())
+
+
+@dataclass(frozen=True)
+class Window:
+    """One fit window for a Sobol sweep."""
+
+    start: str
+    end: str
+    note: str = ""
+
+
+def load_windows(path: Path) -> list[Window]:
+    """Parse + validate a bulk-windows YAML file (consumed by
+    ``submit_sobol.py --windows-file``).
+
+    Schema::
+
+        windows:
+          - { start: "YYYY-MM-DD", end: "YYYY-MM-DD", note?: "..." }
+          - ...
+
+    Raises ``ValueError`` on any schema violation so the submitter
+    fails loudly before launching anything.
+    """
+    import yaml
+
+    raw = yaml.safe_load(path.read_text())
+    if not isinstance(raw, dict) or "windows" not in raw:
+        raise ValueError(f"{path}: top-level must be a mapping with a 'windows' list")
+    wlist = raw["windows"]
+    if not isinstance(wlist, list) or not wlist:
+        raise ValueError(f"{path}: 'windows' must be a non-empty list")
+    out: list[Window] = []
+    for i, w in enumerate(wlist):
+        if not isinstance(w, dict):
+            raise ValueError(f"{path}: windows[{i}] must be a mapping; got {type(w).__name__}")
+        if "start" not in w or "end" not in w:
+            raise ValueError(f"{path}: windows[{i}] missing 'start' and/or 'end'")
+        out.append(Window(start=str(w["start"]), end=str(w["end"]), note=str(w.get("note", ""))))
+    return out
 
 
 def run_tag(

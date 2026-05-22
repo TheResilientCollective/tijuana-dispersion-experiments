@@ -495,7 +495,18 @@ def nrp_run_start_to_slack(context: RunStatusSensorContext) -> None:
 # these with imports from tj_h2s_prediction.resources and remove resources.py.
 # Asset code stays the same — it only references resource keys.
 
+# Explicit job for "materialise sobol_aggregate + sobol_post_analysis"
+# so submit_sobol.py can launch them by a stable jobName via the
+# Dagster GraphQL API (rather than depending on the implicit
+# `__ASSET_JOB`). Discoverable in `dg list defs` and the UI.
+sobol_aggregate_job = dg.define_asset_job(
+    name="sobol_aggregate_job",
+    selection=dg.AssetSelection.assets("sobol_aggregate", "sobol_post_analysis"),
+)
+
+
 defs = dg.Definitions(
+    jobs=[sobol_aggregate_job],
     assets=[
         sobol_chunk_results,
         sobol_aggregate,

@@ -182,12 +182,15 @@ API instead, which delegates to the in-cluster daemon.
 ### 6a. Preview the plan (dry-run)
 
 ```bash
-uv run python nrp/scripts/_submit_backfill.py --dry-run --n-base-samples 8192
+uv run python nrp/scripts/submit_sobol.py --dry-run
 ```
 
-Prints the parameter count, total samples (`N*(D+2) = 106,496`),
-partition layout (100 chunks, ~1,065 rows each), and the seed —
-without touching the cluster.
+Defaults to `--n-base-samples 8192` (full scale). Prints the parameter
+count, total samples (`N*(D+2) = 106,496`), partition layout (100
+chunks, ~1,065 rows each), seed, and fit window — without touching
+the cluster. **If N < 1024 the script prints a SMOKE warning** (the
+postmortem fix: the May 2026 first NRP run was accidentally at N=16
+because the script's previous default was a dev-sized value).
 
 ### 6b. Submit the backfill
 
@@ -196,31 +199,26 @@ Start a port-forward, then submit via the GraphQL API:
 ```bash
 kubectl port-forward svc/dagster-dagster-webserver 3000:80 -n ucsd-center4health &
 sleep 3
-uv run python nrp/scripts/_submit_backfill.py --n-base-samples 8192
+uv run python nrp/scripts/submit_sobol.py
 kill %1 2>/dev/null
 ```
 
-The `--n-base-samples` flag (default 8192) controls the SALib base N;
-the run config is passed via the GraphQL mutation so on-cluster runs
-use the requested sample count instead of the tiny default (16) in
-the asset definition. Use `--seed` to change the RNG seed (default 42).
+Defaults: `--n-base-samples 8192`, `--seed 42`, window from
+`sobol.DEFAULT_WINDOW` (Mar 13–15 2026). Override flags:
+`--n-base-samples`, `--seed`, `--window-start YYYY-MM-DD`,
+`--window-end YYYY-MM-DD`. The run config is passed via the GraphQL
+mutation so on-cluster runs use the requested params instead of
+`SobolConfig`'s tiny local-dev default.
 
-The script prints the backfill ID (e.g. `nvntbbst`). Save it for
-monitoring.
+The script prints the backfill ID (e.g. `nvntbbst`) AND the exact
+follow-up `dg launch` command to run after the chunks finish — copy
+it; you'll need it in 6e.
 
 ### 6c. Monitor progress
 
 **Quick kubectl check** (job-level):
 ```bash
 kubectl get jobs -n ucsd-center4health --no-headers | awk '{print $2}' | sort | uniq -c
-```
-
-**GraphQL monitor** (partition-level):
-```bash
-kubectl port-forward svc/dagster-dagster-webserver 3000:80 -n ucsd-center4health &
-sleep 3
-uv run python nrp/scripts/_monitor_backfill.py <backfill_id>
-kill %1 2>/dev/null
 ```
 
 **Dagster UI**: port-forward and open `http://127.0.0.1:3000` →
@@ -235,40 +233,57 @@ partitions take up to ~25 min. Total wall-time ~30 min.
 kubectl delete jobs --field-selector status.successful=0 -n ucsd-center4health
 ```
 
-### 6e. Submit the aggregation
+### 6e. Materialise aggregator + post-analysis
 
-After all 100 partitions of `sobol_chunk_results` complete, trigger
-`sobol_aggregate` via the Dagster UI, or:
+After all 100 partitions of `sobol_chunk_results` complete, run the
+follow-up command `submit_sobol.py` printed in 6b — it launches
+**both** `sobol_aggregate` AND `sobol_post_analysis` in a single
+run, with the same `(n, seed, window)` config so the archival tag
+matches:
 
 ```bash
 kubectl port-forward svc/dagster-dagster-webserver 3000:80 -n ucsd-center4health &
 sleep 3
-uv run python -c "
-import requests, json
-resp = requests.post('http://localhost:3000/graphql', json={'query': '''
-mutation {
-  launchPartitionBackfill(backfillParams: {
-    assetSelection: [{ path: [\"sobol_aggregate\"] }],
-    partitionNames: []
-  }) {
-    ... on LaunchBackfillSuccess { backfillId }
-    ... on PythonError { message }
-  }
-}'''})
-print(json.dumps(resp.json(), indent=2))
-"
+dg launch --assets sobol_aggregate,sobol_post_analysis \
+  --config '{"ops":{"sobol_post_analysis":{"config":{"n_base_samples":8192,"seed":42,"window_start":"2026-03-13","window_end":"2026-03-16"}}}}'
 kill %1 2>/dev/null
 ```
 
-### 6f. Retrieve results
+`sobol_post_analysis` computes convergence diagnostics (would have
+caught the May 2026 smoke-as-real bug automatically), per-receptor
+top-N, magnitude-vs-shape decomposition, interaction tables, and
+window-specific dropout candidates. It writes the durable archive
+described in 6f and surfaces the headline numbers in the Dagster UI
+via `MaterializeResult` metadata.
+
+### 6f. The S3 layout (two paths, on purpose)
+
+| Path | Lifecycle | Contents |
+|---|---|---|
+| `s3://<bucket>/dagster/runs/sobol_aggregate` | **overwritten each run** (IO-manager pointer to "latest") | pickled `{"indices": [...records...]}` |
+| `s3://<bucket>/dagster/runs/sobol_chunk_results/<chunk_NNN>` | overwritten each run | pickled chunk values |
+| **`s3://<bucket>/runs/<tag>/`** | **durable, per-run** (written by `sobol_post_analysis`) | `sobol_indices.parquet`, `analysis.json`, `summary.md` |
+
+The archive tag is deterministic: `{window_start}_{window_end}_N{n}_seed{seed}_{YYYY-MM-DD}` (e.g. `2026-03-13_2026-03-16_N8192_seed42_2026-05-22`). Multi-window / multi-seed studies coexist without overwriting.
+
+### 6g. Retrieve results
 
 ```bash
 source nrp/.env
+
+# Latest run (IO-manager pointer):
 uv run python nrp/scripts/fetch_sobol_results.py
+
+# Specific archived snapshot:
+uv run python nrp/scripts/fetch_sobol_results.py \
+  --run-tag 2026-03-13_2026-03-16_N8192_seed42_2026-05-22
+
 # → experiments/2026-05-15_sobol_full/output/sobol_indices.csv
 ```
 
-Then write up findings in `experiments/2026-05-15_sobol_full/RESULTS.md`.
+S3 mode auto-detects when `DAGSTER_S3_BUCKET` + `S3_ENDPOINT_URL` +
+AWS creds are all present. Pass `--force-local` to skip S3. Then
+write up findings in `experiments/2026-05-15_sobol_full/RESULTS.md`.
 
 ## 7. Lessons learned (2026-05-20/21 deployment)
 

@@ -1,0 +1,123 @@
+{
+  "n_berry_hours": 12964,
+  "n_berry_gt100": 242,
+  "constant_box_ceiling_to_beat": {
+    "is_stagnation": 0.127,
+    "stable_atm": 0.218
+  },
+  "split": "chronological 70/30 (matches box_calibration / attribution)",
+  "fixed": {
+    "t_ref_c": 20.0,
+    "area_m2": 4000000.0,
+    "H_mix_by_stability_m": {
+      "A": 1600.0,
+      "B": 1200.0,
+      "C": 800.0,
+      "D": 500.0,
+      "E": 200.0,
+      "F": 50.0
+    },
+    "note": "T_ref absorbed into E0 (non-identifiable); E0 closed-form; Q10 & \u03c4 are the only params that move held-out rank skill."
+  },
+  "is_stagnation": {
+    "n_test_regime_hours": 543,
+    "constant_box_before": {
+      "tau_h": 12.0,
+      "e0_g_s": 0.312,
+      "test": {
+        "spearman": 0.1196,
+        "pearson": 0.02,
+        "rmse": 83.9433
+      },
+      "test_extremes": {
+        "n_gt100": 71,
+        "recall_at_100": 0.0,
+        "median_obs_gt100": 177.1,
+        "median_pred_at_those_hrs": 10.6
+      }
+    },
+    "driver_box_point_estimate": {
+      "q10": 1.5,
+      "tau_h": 12.0,
+      "e0_g_s": 0.3635,
+      "t_ref_c": 20.0,
+      "test": {
+        "spearman": 0.1692,
+        "pearson": 0.0632,
+        "rmse": 83.7869
+      },
+      "test_extremes": {
+        "n_gt100": 71,
+        "recall_at_100": 0.0,
+        "median_obs_gt100": 177.1,
+        "median_pred_at_those_hrs": 10.5
+      }
+    },
+    "driver_box_rank_skill_ceiling_heldout": {
+      "spearman": 0.271,
+      "at": {
+        "q10": 5.0,
+        "tau_h": 12.0
+      },
+      "constant_box_ceiling": 0.127,
+      "clears_constant_box_ceiling": true,
+      "delta_vs_constant_box": 0.144
+    }
+  },
+  "stable_atm": {
+    "n_test_regime_hours": 1333,
+    "constant_box_before": {
+      "tau_h": 12.0,
+      "e0_g_s": 0.3068,
+      "test": {
+        "spearman": 0.1855,
+        "pearson": 0.085,
+        "rmse": 69.4147
+      },
+      "test_extremes": {
+        "n_gt100": 119,
+        "recall_at_100": 0.0,
+        "median_obs_gt100": 167.4,
+        "median_pred_at_those_hrs": 8.8
+      }
+    },
+    "driver_box_point_estimate": {
+      "q10": 1.5,
+      "tau_h": 12.0,
+      "e0_g_s": 0.3572,
+      "t_ref_c": 20.0,
+      "test": {
+        "spearman": 0.237,
+        "pearson": 0.1234,
+        "rmse": 69.3119
+      },
+      "test_extremes": {
+        "n_gt100": 119,
+        "recall_at_100": 0.0,
+        "median_obs_gt100": 167.4,
+        "median_pred_at_those_hrs": 8.9
+      }
+    },
+    "driver_box_rank_skill_ceiling_heldout": {
+      "spearman": 0.3378,
+      "at": {
+        "q10": 5.0,
+        "tau_h": 12.0
+      },
+      "constant_box_ceiling": 0.218,
+      "clears_constant_box_ceiling": true,
+      "delta_vs_constant_box": 0.1198
+    }
+  },
+  "event_validation_shipped_path": {
+    "obs_peak_ppb": 177.1,
+    "constant_box_peak_ppb": 9.2,
+    "driver_box_peak_ppb": 7.7,
+    "driver_emission_driver_flag": true,
+    "dispatch": "regime"
+  },
+  "verdict": [
+    "[is_stagnation] constant box held-out Spearman=0.120 (ceiling 0.127) \u2192 driver-box rank ceiling=0.271 at {'q10': 5.0, 'tau_h': np.float64(12.0)} | clears: True (\u0394 +0.144)",
+    "[stable_atm] constant box held-out Spearman=0.185 (ceiling 0.218) \u2192 driver-box rank ceiling=0.338 at {'q10': 5.0, 'tau_h': np.float64(12.0)} | clears: True (\u0394 +0.120)"
+  ]
+}

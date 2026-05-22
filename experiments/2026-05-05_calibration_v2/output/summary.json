@@ -1,0 +1,26 @@
+{
+  "window": {
+    "start": "2026-03-13",
+    "end": "2026-03-16"
+  },
+  "n_sources": 38,
+  "n_named": 17,
+  "n_channel": 12,
+  "n_estuary_grid": 9,
+  "n_observations": 216,
+  "residual_rms_ppb": 48.758124419062355,
+  "n_at_bound": 11,
+  "max_predicted": 172.17386936933258,
+  "max_observed": 394.0,
+  "per_station_correlation": {
+    "SAN YSIDRO": 0.11910660397200142,
+    "NESTOR - BES": 0.5613472740640639,
+    "IB CIVIC CTR": 0.6237872076289437
+  },
+  "total_emission_by_archetype_g_s": {
+    "bay": 0.9999999999999999,
+    "channel": 13.568582358480041,
+    "drain": 16.313102864626867,
+    "estuary": 8.336027916347799
+  }
+}

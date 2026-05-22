@@ -1,5 +1,4 @@
-"""
-Dagster resources for NRP calibration pipelines.
+"""Dagster resources for NRP calibration pipelines.
 
 Two resources, both shared with the `tj_h2s_prediction` project:
 

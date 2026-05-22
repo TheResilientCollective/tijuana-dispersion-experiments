@@ -1,0 +1,100 @@
+experiment,variant,receptor,metric,value,n
+v3.0,v2,SAN YSIDRO,pearson,0.0411,304
+v3.0,v2,SAN YSIDRO,spearman,0.0543,304
+v3.0,v2,SAN YSIDRO,log_pearson,0.0531,304
+v3.0,v3,SAN YSIDRO,pearson,0.0634,304
+v3.0,v3,SAN YSIDRO,spearman,0.064,304
+v3.0,v3,SAN YSIDRO,log_pearson,0.0837,304
+v3.0,v2,NESTOR - BES,pearson,0.2011,309
+v3.0,v2,NESTOR - BES,spearman,0.2402,309
+v3.0,v2,NESTOR - BES,log_pearson,0.4257,309
+v3.0,v3,NESTOR - BES,pearson,0.2112,309
+v3.0,v3,NESTOR - BES,spearman,0.2384,309
+v3.0,v3,NESTOR - BES,log_pearson,0.4339,309
+v3.0,v2,IB CIVIC CTR,pearson,0.091,306
+v3.0,v2,IB CIVIC CTR,spearman,0.3336,306
+v3.0,v2,IB CIVIC CTR,log_pearson,0.4187,306
+v3.0,v3,IB CIVIC CTR,pearson,0.0883,306
+v3.0,v3,IB CIVIC CTR,spearman,0.3408,306
+v3.0,v3,IB CIVIC CTR,log_pearson,0.427,306
+v3.1,v2,SAN YSIDRO,pearson,0.0917,304
+v3.1,v2,SAN YSIDRO,spearman,0.1427,304
+v3.1,v2,SAN YSIDRO,log_pearson,0.1411,304
+v3.1,v3,SAN YSIDRO,pearson,0.1135,304
+v3.1,v3,SAN YSIDRO,spearman,0.1569,304
+v3.1,v3,SAN YSIDRO,log_pearson,0.1784,304
+v3.1,v31,SAN YSIDRO,pearson,0.1154,304
+v3.1,v31,SAN YSIDRO,spearman,0.1536,304
+v3.1,v31,SAN YSIDRO,log_pearson,0.1752,304
+v3.1,v2,NESTOR - BES,pearson,0.2002,309
+v3.1,v2,NESTOR - BES,spearman,0.3482,309
+v3.1,v2,NESTOR - BES,log_pearson,0.4458,309
+v3.1,v3,NESTOR - BES,pearson,0.211,309
+v3.1,v3,NESTOR - BES,spearman,0.3573,309
+v3.1,v3,NESTOR - BES,log_pearson,0.4589,309
+v3.1,v31,NESTOR - BES,pearson,0.2086,309
+v3.1,v31,NESTOR - BES,spearman,0.3624,309
+v3.1,v31,NESTOR - BES,log_pearson,0.4585,309
+v3.1,v2,IB CIVIC CTR,pearson,0.0843,306
+v3.1,v2,IB CIVIC CTR,spearman,0.4227,306
+v3.1,v2,IB CIVIC CTR,log_pearson,0.4084,306
+v3.1,v3,IB CIVIC CTR,pearson,0.0856,306
+v3.1,v3,IB CIVIC CTR,spearman,0.4351,306
+v3.1,v3,IB CIVIC CTR,log_pearson,0.4308,306
+v3.1,v31,IB CIVIC CTR,pearson,0.087,306
+v3.1,v31,IB CIVIC CTR,spearman,0.4465,306
+v3.1,v31,IB CIVIC CTR,log_pearson,0.435,306
+v3.2,v2,SAN YSIDRO,pearson,0.1799,304
+v3.2,v2,SAN YSIDRO,spearman,0.1581,304
+v3.2,v2,SAN YSIDRO,log_pearson,0.1933,304
+v3.2,v3,SAN YSIDRO,pearson,0.1997,304
+v3.2,v3,SAN YSIDRO,spearman,0.1649,304
+v3.2,v3,SAN YSIDRO,log_pearson,0.2257,304
+v3.2,v31,SAN YSIDRO,pearson,0.1942,304
+v3.2,v31,SAN YSIDRO,spearman,0.1621,304
+v3.2,v31,SAN YSIDRO,log_pearson,0.2114,304
+v3.2,v2,NESTOR - BES,pearson,0.2361,309
+v3.2,v2,NESTOR - BES,spearman,0.4928,309
+v3.2,v2,NESTOR - BES,log_pearson,0.4942,309
+v3.2,v3,NESTOR - BES,pearson,0.2422,309
+v3.2,v3,NESTOR - BES,spearman,0.4978,309
+v3.2,v3,NESTOR - BES,log_pearson,0.4994,309
+v3.2,v31,NESTOR - BES,pearson,0.2334,309
+v3.2,v31,NESTOR - BES,spearman,0.5035,309
+v3.2,v31,NESTOR - BES,log_pearson,0.4967,309
+v3.2,v2,IB CIVIC CTR,pearson,0.0825,306
+v3.2,v2,IB CIVIC CTR,spearman,0.4523,306
+v3.2,v2,IB CIVIC CTR,log_pearson,0.4122,306
+v3.2,v3,IB CIVIC CTR,pearson,0.0867,306
+v3.2,v3,IB CIVIC CTR,spearman,0.4693,306
+v3.2,v3,IB CIVIC CTR,log_pearson,0.4456,306
+v3.2,v31,IB CIVIC CTR,pearson,0.0862,306
+v3.2,v31,IB CIVIC CTR,spearman,0.4749,306
+v3.2,v31,IB CIVIC CTR,log_pearson,0.4394,306
+v3.3,v2,SAN YSIDRO,pearson,0.1814,304
+v3.3,v2,SAN YSIDRO,spearman,0.1614,304
+v3.3,v2,SAN YSIDRO,log_pearson,0.1989,304
+v3.3,v3,SAN YSIDRO,pearson,0.198,304
+v3.3,v3,SAN YSIDRO,spearman,0.1577,304
+v3.3,v3,SAN YSIDRO,log_pearson,0.2251,304
+v3.3,v31,SAN YSIDRO,pearson,0.1827,304
+v3.3,v31,SAN YSIDRO,spearman,0.1476,304
+v3.3,v31,SAN YSIDRO,log_pearson,0.1867,304
+v3.3,v2,NESTOR - BES,pearson,0.2049,309
+v3.3,v2,NESTOR - BES,spearman,0.4874,309
+v3.3,v2,NESTOR - BES,log_pearson,0.4817,309
+v3.3,v3,NESTOR - BES,pearson,0.2177,309
+v3.3,v3,NESTOR - BES,spearman,0.4846,309
+v3.3,v3,NESTOR - BES,log_pearson,0.4774,309
+v3.3,v31,NESTOR - BES,pearson,0.1901,309
+v3.3,v31,NESTOR - BES,spearman,0.4781,309
+v3.3,v31,NESTOR - BES,log_pearson,0.4635,309
+v3.3,v2,IB CIVIC CTR,pearson,0.0741,306
+v3.3,v2,IB CIVIC CTR,spearman,0.4458,306
+v3.3,v2,IB CIVIC CTR,log_pearson,0.4013,306
+v3.3,v3,IB CIVIC CTR,pearson,0.082,306
+v3.3,v3,IB CIVIC CTR,spearman,0.4687,306
+v3.3,v3,IB CIVIC CTR,log_pearson,0.4457,306
+v3.3,v31,IB CIVIC CTR,pearson,0.0777,306
+v3.3,v31,IB CIVIC CTR,spearman,0.4669,306
+v3.3,v31,IB CIVIC CTR,log_pearson,0.4182,306

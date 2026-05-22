@@ -1,5 +1,4 @@
-"""
-calibration v3 — diurnal modifier on emissions.
+"""calibration v3 — diurnal modifier on emissions.
 
 Inputs:
     config.yaml                          (this folder)
@@ -252,7 +251,8 @@ def build_source_field(config: dict[str, Any]) -> list[SourceSpec]:
 
 
 def build_met_and_obs(
-    df: pd.DataFrame, receptor_names: list[str]
+    df: pd.DataFrame,
+    receptor_names: list[str],
 ) -> tuple[list[MetCondition], np.ndarray, pd.DatetimeIndex]:
     """Hourly grid: pivot obs to (n_hours × n_receptors); met taken from NESTOR site."""
     df = df.copy()
@@ -267,7 +267,7 @@ def build_met_and_obs(
             "temperature_2m": "mean",
             "cloud_cover": "mean",
             "is_night_f": "mean",
-        }
+        },
     )
     # Met from NESTOR (most complete record); fall back to any-site mean if missing
     nestor = grouped[grouped["site_name"] == "NESTOR - BES"].set_index("hour").sort_index()
@@ -292,7 +292,7 @@ def build_met_and_obs(
                 else 17.0,
                 cloud_cover_frac=cloud_frac,
                 is_night=is_night,
-            )
+            ),
         )
 
     obs = np.full((len(valid_hours), len(receptor_names)), np.nan)
@@ -348,10 +348,10 @@ def solve_bounded(
     b = obs[valid]  # (n_valid,)
 
     bounds_upper = np.array(
-        [ARCHETYPE_BOUNDS_G_S.get(s.archetype, ARCHETYPE_BOUNDS_G_S["unknown"]) for s in sources]
+        [ARCHETYPE_BOUNDS_G_S.get(s.archetype, ARCHETYPE_BOUNDS_G_S["unknown"]) for s in sources],
     )
     prior_mean = np.array(
-        [ARCHETYPE_PRIOR_G_S.get(s.archetype, ARCHETYPE_PRIOR_G_S["unknown"]) for s in sources]
+        [ARCHETYPE_PRIOR_G_S.get(s.archetype, ARCHETYPE_PRIOR_G_S["unknown"]) for s in sources],
     )
 
     if prior_lambda > 0:
@@ -387,7 +387,8 @@ def solve_bounded(
 
 def weighted_log_mse(pred: np.ndarray, obs: np.ndarray) -> float:
     """log10(1 + (pred - obs)^2) averaged over valid (t, r). Squelches the impact
-    of the few extreme spill-event hours while still penalising widespread bias."""
+    of the few extreme spill-event hours while still penalising widespread bias.
+    """
     valid = ~np.isnan(obs)
     sq = (pred[valid] - obs[valid]) ** 2
     return float(np.mean(np.log10(1.0 + sq)))
@@ -476,7 +477,9 @@ def fit_v3(
 
 
 def per_receptor_metrics(
-    pred: np.ndarray, obs: np.ndarray, receptor_names: list[str]
+    pred: np.ndarray,
+    obs: np.ndarray,
+    receptor_names: list[str],
 ) -> dict[str, dict[str, float]]:
     out: dict[str, dict[str, float]] = {}
     for r_idx, rname in enumerate(receptor_names):
@@ -611,7 +614,11 @@ def main() -> None:
         a_holdout = forward_run_per_source(unit_sources, receptors_core, met_holdout, units="ppb")
 
         pred_holdout_v2 = predict_on_window(
-            rates_v2, a_holdout, [m.timestamp for m in met_holdout], None, None
+            rates_v2,
+            a_holdout,
+            [m.timestamp for m in met_holdout],
+            None,
+            None,
         )
         pred_holdout_v3 = predict_on_window(
             v3_out["rates"],
@@ -623,17 +630,25 @@ def main() -> None:
         metrics_holdout_v2 = per_receptor_metrics(pred_holdout_v2, obs_holdout, receptor_names)
         metrics_holdout_v3 = per_receptor_metrics(pred_holdout_v3, obs_holdout, receptor_names)
         log.info(
-            "v2 holdout metrics: %s", {r: round(m["r"], 3) for r, m in metrics_holdout_v2.items()}
+            "v2 holdout metrics: %s",
+            {r: round(m["r"], 3) for r, m in metrics_holdout_v2.items()},
         )
         log.info(
-            "v3 holdout metrics: %s", {r: round(m["r"], 3) for r, m in metrics_holdout_v3.items()}
+            "v3 holdout metrics: %s",
+            {r: round(m["r"], 3) for r, m in metrics_holdout_v3.items()},
         )
 
         wind_v2_holdout = wind_conditional_residuals(
-            pred_holdout_v2, obs_holdout, met_holdout, receptor_names
+            pred_holdout_v2,
+            obs_holdout,
+            met_holdout,
+            receptor_names,
         )
         wind_v3_holdout = wind_conditional_residuals(
-            pred_holdout_v3, obs_holdout, met_holdout, receptor_names
+            pred_holdout_v3,
+            obs_holdout,
+            met_holdout,
+            receptor_names,
         )
 
     # ---------- write artifacts ---------- #
@@ -644,7 +659,7 @@ def main() -> None:
             "name": [s.name for s in sources],
             "archetype": [s.archetype for s in sources],
             "rate_g_s": rates_v2,
-        }
+        },
     ).to_csv(OUTPUTS / "fitted_rates_v2.csv", index=False)
 
     pd.DataFrame(
@@ -652,7 +667,7 @@ def main() -> None:
             "name": [s.name for s in sources],
             "archetype": [s.archetype for s in sources],
             "rate_g_s": v3_out["rates"],
-        }
+        },
     ).to_csv(OUTPUTS / "fitted_rates_v3.csv", index=False)
 
     def ts_df(
@@ -670,7 +685,8 @@ def main() -> None:
 
     pred_train_v3 = v3_out["pred_train"]
     ts_df(hours_train, obs_train, pred_train_v2, pred_train_v3).to_csv(
-        OUTPUTS / "timeseries_train.csv", index=False
+        OUTPUTS / "timeseries_train.csv",
+        index=False,
     )
     if (
         holdout_w is not None
@@ -680,7 +696,8 @@ def main() -> None:
         and pred_holdout_v3 is not None
     ):
         ts_df(hours_holdout, obs_holdout, pred_holdout_v2, pred_holdout_v3).to_csv(
-            OUTPUTS / "timeseries_holdout.csv", index=False
+            OUTPUTS / "timeseries_holdout.csv",
+            index=False,
         )
     if wind_v2_holdout is not None:
         wind_v2_holdout.to_csv(OUTPUTS / "wind_residuals_v2.csv", index=False)

@@ -1,5 +1,4 @@
-"""
-Calm-night wind reanalysis (no fitting).
+"""Calm-night wind reanalysis (no fitting).
 
 The May 10-11 Berry event analysis left two explanations for why the
 model misses Berry's nocturnal extremes:
@@ -67,7 +66,7 @@ def main() -> None:
     dir_sweep_deg = float(
         np.ptp(ev.loc[ev.H2S > 100, "wind_direction_10m"].to_numpy())
         if (ev.H2S > 100).any()
-        else np.nan
+        else np.nan,
     )
 
     # 3. hour-to-hour |Δdir| calm-night vs windy
@@ -80,7 +79,10 @@ def main() -> None:
 
     # 4. spatial coherence: SY vs NESTOR during event
     w = df.pivot_table(
-        index="time", columns="site_name", values="wind_direction_10m", aggfunc="first"
+        index="time",
+        columns="site_name",
+        values="wind_direction_10m",
+        aggfunc="first",
     )
     evw = w[(w.index >= EVENT[0]) & (w.index <= EVENT[1])]
     sy_nes = _adiff(evw["SAN YSIDRO"], evw["NESTOR - BES"]).abs()

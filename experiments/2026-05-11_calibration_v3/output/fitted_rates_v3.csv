@@ -1,0 +1,39 @@
+name,archetype,rate_g_s
+Stewart's Drain,drain,0.07102348240946192
+Smuggler's Gulch,drain,0.6887528657762995
+Hollister St PS,drain,2.859420860151531
+Goat Canyon,drain,0.23872296714863134
+Goat Canyon PS,drain,0.6862168008728865
+Del Sol Canyon,drain,1.682358444535926e-30
+Silva Drain,drain,0.06132181512638161
+Saturn Blvd Bridge,channel,0.49684680970671696
+Hollister St Bridge N,channel,1.5711215757154272e-27
+Hollister St Bridge S,channel,0.07817654441742491
+Dairy Mart Bridge,channel,0.11579397932217515
+Oneonta Slough Near IB,estuary,0.15723748277513136
+Tijuana River Beach Outlet,estuary,0.14156621353235743
+Tijuana River Crossing CDLP W,channel,0.14820317641816105
+Tijuana River Crossing CDLP E,channel,0.27505064876211294
+San Diego Bay ponds Otay River Outlet,bay,0.49999999999999994
+San Diego Bay Ponds near Fruitdale,bay,0.2702926321206219
+channel_00,channel,0.021042973163147034
+channel_01,channel,0.7155415585863825
+channel_02,channel,1.9412936141920091e-25
+channel_03,channel,9.074920545036068e-31
+channel_04,channel,0.23755787709124884
+channel_05,channel,3.431005974708031e-31
+channel_06,channel,0.6902019824051365
+channel_07,channel,0.6185489914792607
+channel_08,channel,0.07605491410320801
+channel_09,channel,0.13423872961201172
+channel_10,channel,2.712227727562812e-30
+channel_11,channel,0.09865981896881572
+estuary_00,estuary,0.08854761049897347
+estuary_01,estuary,0.2173059668484618
+estuary_02,estuary,0.8081270109135326
+estuary_03,estuary,1.361223201319657e-27
+estuary_04,estuary,0.015384111376442109
+estuary_05,estuary,0.03690528056345805
+estuary_06,estuary,0.0015078525851882055
+estuary_07,estuary,2.6100754642101175e-13
+estuary_08,estuary,0.022712975537772972

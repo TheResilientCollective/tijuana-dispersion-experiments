@@ -1,0 +1,51 @@
+name,archetype,rate_g_s
+Stewart's Drain,drain,0.06959125935522842
+Smuggler's Gulch,drain,0.5771816057440177
+Hollister St PS,drain,2.5535635956235256
+Goat Canyon,drain,0.21938519212636923
+Goat Canyon PS,drain,0.6090327871910559
+Del Sol Canyon,drain,6.604941710936231e-72
+Silva Drain,drain,0.04736333155507826
+Saturn Blvd Bridge,channel,0.4009693746301889
+Hollister St Bridge N,channel,2.723564187996074e-75
+Hollister St Bridge S,channel,0.061894298644236
+Dairy Mart Bridge,channel,0.08768818732819253
+Oneonta Slough Near IB,estuary,0.14911272862606126
+Tijuana River Beach Outlet,estuary,0.17255487464557562
+Tijuana River Crossing CDLP W,channel,0.10997562483909702
+Tijuana River Crossing CDLP E,channel,0.25944824773174185
+San Diego Bay ponds Otay River Outlet,bay,0.5380419580985274
+San Diego Bay Ponds near Fruitdale,bay,0.22416584245573004
+channel_00,channel,7.079172105793217e-31
+channel_01,channel,0.5792024256552297
+channel_02,channel,9.920967326166762e-66
+channel_03,channel,4.132272620276717e-70
+channel_04,channel,0.20002350114726636
+channel_05,channel,5.541915723489656e-73
+channel_06,channel,0.5326615088883557
+channel_07,channel,0.5491900009591961
+channel_08,channel,0.06352977277131766
+channel_09,channel,0.09680465227413285
+channel_10,channel,3.9724351251429345e-75
+channel_11,channel,0.07572901570046872
+estuary_00,estuary,0.07411794490922266
+estuary_01,estuary,0.17238324510106498
+estuary_02,estuary,0.7790613172001346
+estuary_03,estuary,5e-324
+estuary_04,estuary,0.010820972757233944
+estuary_05,estuary,0.028623946452491215
+estuary_06,estuary,0.000626651093021586
+estuary_07,estuary,8.581857539831061e-19
+estuary_08,estuary,0.02014782869760744
+ne00,northeast,0.0908853377706834
+ne01,northeast,0.010189526320116398
+ne02,northeast,0.17641694253557613
+ne10,northeast,2.4849504132383433e-71
+ne11,northeast,0.40757563953274895
+ne12,northeast,0.04041139610918855
+ne20,northeast,0.29981668143501394
+ne21,northeast,0.4264598843794827
+ne22,northeast,0.21689090248652204
+ne30,northeast,0.36727607435140397
+ne31,northeast,0.23733319174744744
+ne32,northeast,0.0638577436248646

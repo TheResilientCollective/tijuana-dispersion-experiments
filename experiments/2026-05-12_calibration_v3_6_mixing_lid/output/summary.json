@@ -1,0 +1,64 @@
+{
+  "experiment": "calibration_v3_6_mixing_lid",
+  "run_date": "2026-05-15T15:05:41.406037",
+  "n_sources": 55,
+  "baseline_no_lid": {
+    "amp": 2.1308670043945366,
+    "phase": 4.994201660156245,
+    "holdout": {
+      "SAN YSIDRO": {
+        "spearman": 0.18243018204299713,
+        "log_pearson": 0.23716069449388602,
+        "pearson": 0.19932527556359186,
+        "n": 304
+      },
+      "NESTOR - BES": {
+        "spearman": 0.5253107436408025,
+        "log_pearson": 0.494158149737451,
+        "pearson": 0.23746850072580636,
+        "n": 309
+      },
+      "IB CIVIC CTR": {
+        "spearman": 0.47298618954395955,
+        "log_pearson": 0.4450657439581866,
+        "pearson": 0.0867242104337598,
+        "n": 306
+      }
+    },
+    "loss": 0.9111561625711543
+  },
+  "v3_6_lid": {
+    "amp": 1.3628081527845746,
+    "phase": 8.054664632403222,
+    "k_L": 165.09995679002628,
+    "holdout": {
+      "SAN YSIDRO": {
+        "spearman": 0.1715663343703444,
+        "log_pearson": 0.20439487916761503,
+        "pearson": 0.17142413778984464,
+        "n": 304
+      },
+      "NESTOR - BES": {
+        "spearman": 0.5044029090981176,
+        "log_pearson": 0.4577786014977761,
+        "pearson": 0.22868199469115244,
+        "n": 309
+      },
+      "IB CIVIC CTR": {
+        "spearman": 0.4571520882055384,
+        "log_pearson": 0.41508084400662615,
+        "pearson": 0.08484489298379733,
+        "n": 306
+      }
+    },
+    "loss": 0.9133490739066259
+  },
+  "calm_night_extreme_berry": {
+    "n_calm_night_extreme_hours": 39,
+    "berry_obs_mean": 178.9923076923077,
+    "berry_pred_mean_baseline": 9.390868945748183,
+    "berry_pred_mean_v36": 9.313186805772153,
+    "berry_pred_max_baseline": 67.09261030802708,
+    "berry_pred_max_v36": 69.00111080140191
+  }
+}

@@ -1,0 +1,95 @@
+{
+  "n_berry_hours": 12964,
+  "n_berry_gt100": 242,
+  "held_out_fraction": 0.3,
+  "fixed": {
+    "H_mix_by_stability_m": {
+      "A": 1600.0,
+      "B": 1200.0,
+      "C": 800.0,
+      "D": 500.0,
+      "E": 200.0,
+      "F": 50.0
+    },
+    "area_m2": 4000000.0,
+    "note": "amplitude identifiable only as E_local/(A\u00b7H_mix); A and H_mix held at shipped physical defaults, E_local fit, \u03c4 fit via dynamics."
+  },
+  "calibration_operational_classifier": {
+    "label": "is_stagnation (operational: is_night & wind<2.5)",
+    "n_regime_train": 1355,
+    "n_regime_test": 543,
+    "tau_h_star": 12.0,
+    "tau_pegged_at_grid_max": true,
+    "e_local_g_s_star": 0.312,
+    "lumped_K_g_per_s_per_m3": 1.56e-09,
+    "rank_skill_ceiling_test_spearman": 0.1268,
+    "train": {
+      "spearman": 0.0143,
+      "pearson": -0.0257,
+      "rmse": 49.8624
+    },
+    "test": {
+      "spearman": 0.1196,
+      "pearson": 0.02,
+      "rmse": 83.9433
+    },
+    "test_extremes": {
+      "n_gt100": 71,
+      "recall_at_100": 0.0,
+      "false_pos_rate_at_100": 0.0,
+      "median_obs_gt100": 177.1,
+      "median_pred_at_those_hrs": 10.6
+    },
+    "all_regime_extremes": {
+      "n_gt100": 126,
+      "recall_at_100": 0.0,
+      "false_pos_rate_at_100": 0.0,
+      "median_obs_gt100": 176.6,
+      "median_pred_at_those_hrs": 10.7
+    }
+  },
+  "calibration_stable_atm_classifier": {
+    "label": "stable_atm (reanalysis-preferred classifier)",
+    "n_regime_train": 3015,
+    "n_regime_test": 1333,
+    "tau_h_star": 12.0,
+    "tau_pegged_at_grid_max": true,
+    "e_local_g_s_star": 0.3068,
+    "lumped_K_g_per_s_per_m3": 1.534e-09,
+    "rank_skill_ceiling_test_spearman": 0.2176,
+    "train": {
+      "spearman": 0.092,
+      "pearson": 0.0138,
+      "rmse": 40.9649
+    },
+    "test": {
+      "spearman": 0.1855,
+      "pearson": 0.085,
+      "rmse": 69.4147
+    },
+    "test_extremes": {
+      "n_gt100": 119,
+      "recall_at_100": 0.0,
+      "false_pos_rate_at_100": 0.0,
+      "median_obs_gt100": 167.4,
+      "median_pred_at_those_hrs": 8.8
+    },
+    "all_regime_extremes": {
+      "n_gt100": 212,
+      "recall_at_100": 0.0,
+      "false_pos_rate_at_100": 0.0,
+      "median_obs_gt100": 167.0,
+      "median_pred_at_those_hrs": 8.7
+    }
+  },
+  "event_validation_shipped_dispatch": {
+    "window": "2026-05-10 18:00 .. 2026-05-11 08:00",
+    "n_hours": 15,
+    "obs_peak_ppb": 177.1,
+    "gaussian_peak_ppb": 0.161,
+    "box_dispatch_peak_ppb": 7.9,
+    "n_stagnation_flagged": 4,
+    "dispatch": "regime",
+    "verdict": "Calibrated regime dispatch lifts the calm-night event from ~0 (Gaussian, plume routed away) to O(observed); pure Gaussian remains ~0 regardless of emission scale."
+  }
+}

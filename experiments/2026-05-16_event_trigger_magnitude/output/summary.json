@@ -1,0 +1,95 @@
+{
+  "n_berry_hours": 12964,
+  "n_berry_gt100": 242,
+  "calibrated_driver": {
+    "q10": 5.0,
+    "tau_h": 12.0,
+    "t_ref_c": 20.0
+  },
+  "split": "chronological 70/30 (matches prior experiments)",
+  "baseline_note": "driver box (no trigger) recall@100 = 0.00 (box_driver_calibration)",
+  "is_stagnation": {
+    "n_test_regime_hours": 543,
+    "n_test_gt100": 71,
+    "no_trigger_baseline_test": {
+      "recall_at_100": 0.0,
+      "precision_at_100": 0.0,
+      "fpr_at_100": 0.0,
+      "f1_at_100": 0.0,
+      "youden_j": 0.0,
+      "spearman": 0.271
+    },
+    "best_EXOGENOUS_trigger_forward_usable": {
+      "feature": "sbiwtp_deficit",
+      "train_percentile": 98.0,
+      "boost": 10.0,
+      "train_youden_j": 0.017,
+      "test": {
+        "recall_at_100": 0.0,
+        "precision_at_100": 0.0,
+        "fpr_at_100": 0.0,
+        "f1_at_100": 0.0,
+        "youden_j": 0.0,
+        "spearman": 0.2687
+      }
+    },
+    "best_AUTOREGRESSIVE_trigger_REFERENCE_ONLY": {
+      "feature": "h2s_lag_1h",
+      "train_percentile": 95.0,
+      "boost": 100.0,
+      "train_youden_j": 0.117,
+      "test": {
+        "recall_at_100": 0.211,
+        "precision_at_100": 0.349,
+        "fpr_at_100": 0.059,
+        "f1_at_100": 0.263,
+        "youden_j": 0.152,
+        "spearman": 0.4418
+      }
+    }
+  },
+  "stable_atm": {
+    "n_test_regime_hours": 1333,
+    "n_test_gt100": 119,
+    "no_trigger_baseline_test": {
+      "recall_at_100": 0.0,
+      "precision_at_100": 0.0,
+      "fpr_at_100": 0.0,
+      "f1_at_100": 0.0,
+      "youden_j": 0.0,
+      "spearman": 0.3378
+    },
+    "best_EXOGENOUS_trigger_forward_usable": {
+      "feature": "sbiwtp_deficit",
+      "train_percentile": 98.0,
+      "boost": 30.0,
+      "train_youden_j": 0.01,
+      "test": {
+        "recall_at_100": 0.0,
+        "precision_at_100": 0.0,
+        "fpr_at_100": 0.0,
+        "f1_at_100": 0.0,
+        "youden_j": 0.0,
+        "spearman": 0.3084
+      }
+    },
+    "best_AUTOREGRESSIVE_trigger_REFERENCE_ONLY": {
+      "feature": "h2s_lag_1h",
+      "train_percentile": 98.0,
+      "boost": 100.0,
+      "train_youden_j": 0.07,
+      "test": {
+        "recall_at_100": 0.218,
+        "precision_at_100": 0.338,
+        "fpr_at_100": 0.042,
+        "f1_at_100": 0.265,
+        "youden_j": 0.176,
+        "spearman": 0.4591
+      }
+    }
+  },
+  "verdict": [
+    "[is_stagnation] baseline recall@100=0.00 | best EXOGENOUS recall=0.0, prec=0.0 (feat=sbiwtp_deficit) | AUTOREGRESSIVE ceiling recall=0.211, prec=0.349",
+    "[stable_atm] baseline recall@100=0.00 | best EXOGENOUS recall=0.0, prec=0.0 (feat=sbiwtp_deficit) | AUTOREGRESSIVE ceiling recall=0.218, prec=0.338"
+  ]
+}

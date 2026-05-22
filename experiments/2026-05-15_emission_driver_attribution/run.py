@@ -1,5 +1,4 @@
-"""
-Emission-driver attribution for Berry's calm-night extremes.
+"""Emission-driver attribution for Berry's calm-night extremes.
 
 Why
 ---
@@ -102,7 +101,8 @@ def _rho(a: np.ndarray, b: np.ndarray) -> float:
 def _emissions_form_unfitted(berry: pd.DataFrame) -> np.ndarray:
     """The shipped emissions.py multiplicative modifier with literature
     default parameters — no fitting. 'drain' archetype (Berry's
-    dominant nearby source class)."""
+    dominant nearby source class).
+    """
     p = EmissionParameters()
     out = np.zeros(len(berry))
     for i, (_, row) in enumerate(berry.iterrows()):
@@ -172,7 +172,9 @@ def main() -> None:
 
         # 1. per-driver Spearman on held-out regime hours
         def driver_rhos(
-            cols: list[str], tm: np.ndarray = test_m, o: np.ndarray = ot
+            cols: list[str],
+            tm: np.ndarray = test_m,
+            o: np.ndarray = ot,
         ) -> dict[str, float]:
             r = {}
             for c in cols:
@@ -228,7 +230,7 @@ def main() -> None:
             f"best single exo={bb['best_single_exogenous']:.3f} | "
             f"emissions-form(unfitted)={rr['shipped_emissions_form_unfitted_spearman']:.3f} | "
             f"fitted upper bound={rr['fitted_top6_exogenous_upperbound_spearman']:.3f} | "
-            f"upper-bound clears ceiling: {bb['fitted_upperbound_beats']}"
+            f"upper-bound clears ceiling: {bb['fitted_upperbound_beats']}",
         )
     report["verdict"] = verdict_lines
 

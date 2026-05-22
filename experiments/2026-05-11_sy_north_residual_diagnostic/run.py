@@ -1,5 +1,4 @@
-"""
-Diagnostic: characterise the SAN YSIDRO N/NE residual flagged by
+"""Diagnostic: characterise the SAN YSIDRO N/NE residual flagged by
 calibration v3. Pure analysis — no fitting.
 
 Inputs:
@@ -77,7 +76,7 @@ def main() -> None:
     aligned = wide.join(met, how="inner")
     aligned["sector_idx"] = aligned["wind_direction_10m"].apply(sector_index)
     aligned["sector"] = aligned["sector_idx"].apply(
-        lambda i: SECTOR_LABELS[i] if i is not None else None
+        lambda i: SECTOR_LABELS[i] if i is not None else None,
     )
     aligned["hour_of_day"] = aligned.index.hour
 
@@ -88,7 +87,7 @@ def main() -> None:
             "NESTOR - BES": "mean",
             "IB CIVIC CTR": "mean",
             "wind_speed_10m": "mean",
-        }
+        },
     )
     sector_means["n_hours"] = aligned.groupby("sector").size()
     sector_means = sector_means.reindex(SECTOR_LABELS).fillna(0)
@@ -126,7 +125,8 @@ def main() -> None:
     log.info("v3 sources at upper bound: %d", len(at_bound))
     if len(at_bound):
         log.info(
-            "  %s", at_bound[["name", "archetype", "rate_g_s", "bound_g_s"]].to_string(index=False)
+            "  %s",
+            at_bound[["name", "archetype", "rate_g_s", "bound_g_s"]].to_string(index=False),
         )
 
     # ---------- summary ---------- #
@@ -144,7 +144,7 @@ def main() -> None:
         "nestor_heavy_nocturnal_fraction": (
             float(
                 heavy["hour_of_day"].isin(range(20, 24)).sum()
-                + heavy["hour_of_day"].isin(range(0, 8)).sum()
+                + heavy["hour_of_day"].isin(range(8)).sum(),
             )
             / max(len(heavy), 1)
         ),

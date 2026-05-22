@@ -1,5 +1,4 @@
-"""
-The decisive test: calibrate the box + temperature-led emission driver
+"""The decisive test: calibrate the box + temperature-led emission driver
 against Berry's >100 ppb hours.
 
 Arc
@@ -126,7 +125,7 @@ def main() -> None:
                 "temperature_2m",
                 "cloud_cover",
                 "is_night",
-            ]
+            ],
         )
         .sort_values("time")
         .reset_index(drop=True)
@@ -171,7 +170,8 @@ def main() -> None:
     # Driver box (issue #6): unit-E0 temperature-led series, linear in E0.
     def driver_box_unit(q10: float, tau: float) -> np.ndarray:
         e_unit = temperature_led_e_local(
-            met, TemperatureEmissionParams(e0_g_s=1.0, q10=q10, t_ref_c=T_REF_C)
+            met,
+            TemperatureEmissionParams(e0_g_s=1.0, q10=q10, t_ref_c=T_REF_C),
         )
         return box_series(
             met,
@@ -316,10 +316,12 @@ def main() -> None:
                 **base,
                 emission_driver=True,
                 emission_driver_params=EmissionDriverParams(
-                    q10=float(pe_pt["q10"]), t_ref_c=T_REF_C, e0_g_s=float(pe_pt["e0_g_s"])
+                    q10=float(pe_pt["q10"]),
+                    t_ref_c=T_REF_C,
+                    e0_g_s=float(pe_pt["e0_g_s"]),
                 ),
                 cache_key=None,
-            )
+            ),
         )
         o_ev = ev["H2S"].to_numpy(dtype=float)
         ev_out = {
@@ -341,7 +343,7 @@ def main() -> None:
             f"[{rn}] constant box held-out Spearman={b:.3f} "
             f"(ceiling {c['constant_box_ceiling']:.3f}) → driver-box rank "
             f"ceiling={c['spearman']:.3f} at {c['at']} | clears: "
-            f"{c['clears_constant_box_ceiling']} (Δ {c['delta_vs_constant_box']:+.3f})"
+            f"{c['clears_constant_box_ceiling']} (Δ {c['delta_vs_constant_box']:+.3f})",
         )
     report["verdict"] = verdict
 

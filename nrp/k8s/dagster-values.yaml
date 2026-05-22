@@ -1,0 +1,115 @@
+# Helm values for the official `dagster/dagster` chart, NRP deployment.
+#
+#   helm repo add dagster https://dagster-io.github.io/helm
+#   helm repo update
+#   # PRE-FLIGHT (validate against the installed chart version — this
+#   # file could not be `helm template`-checked offline when written):
+#   helm template dagster dagster/dagster -n ucsd-center4health \
+#     -f nrp/k8s/dagster-values.yaml | kubectl apply --dry-run=client -f -
+#   helm upgrade --install dagster dagster/dagster -n ucsd-center4health \
+#     -f nrp/k8s/dagster-values.yaml
+#
+# Fill every TODO before installing. Keys follow the standard dagster
+# chart; pin the chart version (`--version`) and re-check the value
+# paths against `helm show values dagster/dagster` for that version.
+
+global:
+  # The Bitnami subchart auto-creates secret `dagster-postgresql`;
+  # point Dagster at the same one so passwords stay in sync.
+  postgresqlSecretName: dagster-postgresql  # pragma: allowlist secret  (secret *name*, not a value)
+
+imagePullSecrets:
+  - name: gitlab-registry-cred
+
+# Reuse our pre-created least-privilege SA (nrp/k8s/rbac.yaml) for the
+# webserver/daemon AND launched run/step pods, so the daemon (which
+# hosts the run launcher) has the job-create RBAC.
+serviceAccount:
+  create: false
+  name: dagster-nrp
+
+# REQUIRED for the Sobol fan-out: the daemon runs the backfill that
+# launches the 100 per-partition runs. Without it, multi-run
+# partitioned materialization does not execute.
+dagsterDaemon:
+  enabled: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+dagsterWebserver:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  service:
+    type: ClusterIP
+    port: 80
+  # Reach it with: kubectl port-forward svc/dagster-dagster-webserver 3000:80
+  # -n ucsd-center4health  (add an Ingress here only if NRP exposes one)
+
+# Per-run/step K8s Jobs (one pod per Sobol chunk).
+runLauncher:
+  type: K8sRunLauncher
+  config:
+    k8sRunLauncher:
+      imagePullPolicy: IfNotPresent
+      jobNamespace: ucsd-center4health
+      # All step pods get the full env (S3 creds+endpoint+bucket, Slack,
+      # NRP_NAMESPACE) from this one secret — matches the keys in
+      # nrp/k8s/job_template.yaml (object-store-credentials).
+      envSecrets:
+        - name: object-store-credentials
+
+# Built-in Postgres (managed by the Dagster Helm chart).
+generatePostgresqlPasswordSecret: false
+postgresql:
+  enabled: true
+  postgresqlUsername: dagster
+  postgresqlDatabase: dagster
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  service:
+    port: 5432
+
+# The NRP code location (our Dagster project: `nrp.definitions`).
+dagster-user-deployments:
+  enabled: true
+  imagePullSecrets:
+    - name: gitlab-registry-cred
+  deployments:
+    - name: nrp
+      # digest-pinned worker image (must match nrp/.env
+      # DAGSTER_IMAGE; build/push per nrp/DEPLOYMENT.md §1).
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+      image:
+        repository: gitlab-registry.nrp-nautilus.io/ucsd-center4health/nrp-worker
+        tag: "315fdb2-pg"
+        pullPolicy: IfNotPresent
+      dagsterApiGrpcArgs:
+        - "-m"
+        - "nrp.definitions"
+      port: 3030
+      includeConfigInLaunchedRuns:
+        enabled: true
+      envSecrets:
+        - name: object-store-credentials

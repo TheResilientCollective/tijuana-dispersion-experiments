@@ -1,5 +1,4 @@
-"""
-calibration v3.6 — nocturnal mixing-lid (limited-mixing Gaussian).
+"""calibration v3.6 — nocturnal mixing-lid (limited-mixing Gaussian).
 
 Tier-1 of the mixing-height design. A reflecting lid at height L(t)
 traps emissions in a shallow stable boundary layer on calm clear
@@ -120,7 +119,7 @@ def precompute_geometry(
             pref = 1e6 / (2.0 * math.pi * u * sy * sz)
             cross = np.exp(-0.5 * (Y / sy) ** 2)
             vert = np.exp(-0.5 * ((r_z[:, None] - s_H[None, :]) / sz) ** 2) + np.exp(
-                -0.5 * ((r_z[:, None] + s_H[None, :]) / sz) ** 2
+                -0.5 * ((r_z[:, None] + s_H[None, :]) / sz) ** 2,
             )
         ugm3 = np.where(downwind, pref * cross * vert, 0.0)
         ppb = ugm3_to_ppb(ugm3, np.full_like(ugm3, m.temperature_c))
@@ -282,7 +281,7 @@ def main() -> None:
 
     tr, ho = config["windows"]["train"], config["windows"]["holdout"]
     df_tr = v35.load_window(parquet, tr["start"], tr["end"])
-    met_tr, obs_tr, hrs_tr = v35.build_met_and_obs(df_tr, rec_names)
+    met_tr, obs_tr, _hrs_tr = v35.build_met_and_obs(df_tr, rec_names)
     df_ho = v35.load_window(parquet, ho["start"], ho["end"])
     met_ho, obs_ho, hrs_ho = v35.build_met_and_obs(df_ho, rec_names)
     log.info("train %d h, holdout %d h", len(met_tr), len(met_ho))
@@ -352,7 +351,7 @@ def main() -> None:
             "archetype": [s.archetype for s in sources],
             "rate_baseline": base["rates"],
             "rate_v36": v36["rates"],
-        }
+        },
     ).to_csv(OUTPUTS / "fitted_rates.csv", index=False)
     cols: dict[str, Any] = {"hour": hrs_ho.astype(str)}
     for i, r in enumerate(rec_names):

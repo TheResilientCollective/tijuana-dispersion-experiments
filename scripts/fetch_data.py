@@ -1,5 +1,4 @@
-"""
-Fetch declared data sources to ./data/.
+"""Fetch declared data sources to ./data/.
 
 Reads `data/manifest.yaml` and downloads each dataset with checksum
 verification. Refuses to silently substitute fake or zero data when a
@@ -67,7 +66,7 @@ def fetch_one(dataset: dict, dry_run: bool = False) -> str:
                 # Likely an HTML error page rather than the real file
                 raise RuntimeError(
                     f"{name}: downloaded {actual_size} bytes, expected ~{expected_mb} MB. "
-                    f"Probably an upstream redirect or auth wall."
+                    f"Probably an upstream redirect or auth wall.",
                 )
             sha = sha256_file(target)
             log.info("fetched %s (%s bytes, sha256=%s)", name, actual_size, sha[:12])
@@ -82,7 +81,7 @@ def fetch_one(dataset: dict, dry_run: bool = False) -> str:
     # All URLs failed. Raise — do NOT return placeholder data.
     raise RuntimeError(
         f"All URLs failed for dataset '{name}'. Last error: {last_error}. "
-        "Aborting. (Reproducibility rule: no synthetic data fallbacks.)"
+        "Aborting. (Reproducibility rule: no synthetic data fallbacks.)",
     )
 
 
@@ -99,8 +98,7 @@ def verify_checksum(dataset: dict, sha: str) -> None:
     )
     if dataset.get("strict", False):
         raise RuntimeError(msg)
-    else:
-        log.warning("%s (non-strict; continuing)", msg)
+    log.warning("%s (non-strict; continuing)", msg)
 
 
 def main() -> int:

@@ -1,5 +1,4 @@
-"""
-Dagster pipeline for NRP-side calibration workloads.
+"""Dagster pipeline for NRP-side calibration workloads.
 
 Asset graph:
 
@@ -39,23 +38,30 @@ assets," "io_manager," "resources," "sensors."
 
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 import dagster as dg
+import numpy as np
+import pandas as pd
 from dagster import AssetExecutionContext, RunFailureSensorContext, RunStatusSensorContext
 from dagster_aws.s3 import S3PickleIOManager, S3Resource
 from dagster_k8s import k8s_job_executor
 
+from . import sobol
 from .resources import SlackWebhookResource
 
 log = logging.getLogger(__name__)
+
+#: Number of Sobol chunk partitions (fan-out width on NRP).
+N_SOBOL_CHUNKS = 100
 
 
 # ============================================================
 # Partitions
 # ============================================================
 
-sobol_partitions = dg.StaticPartitionsDefinition([f"chunk_{i:03d}" for i in range(100)])
+sobol_partitions = dg.StaticPartitionsDefinition([f"chunk_{i:03d}" for i in range(N_SOBOL_CHUNKS)])
 
 mcmc_partitions = dg.StaticPartitionsDefinition([f"chain_{i:02d}" for i in range(8)])
 
@@ -79,9 +85,9 @@ _WORKER_K8S_TAGS = {
             "resources": {
                 "requests": {"cpu": "500m", "memory": "1Gi"},
                 "limits": {"cpu": "1", "memory": "2Gi"},
-            }
-        }
-    }
+            },
+        },
+    },
 }
 
 _AGGREGATOR_K8S_TAGS = {
@@ -90,9 +96,9 @@ _AGGREGATOR_K8S_TAGS = {
             "resources": {
                 "requests": {"cpu": "1", "memory": "4Gi"},
                 "limits": {"cpu": "2", "memory": "8Gi"},
-            }
-        }
-    }
+            },
+        },
+    },
 }
 
 
@@ -101,64 +107,159 @@ _AGGREGATOR_K8S_TAGS = {
 # ============================================================
 
 
+class SobolConfig(dg.Config):
+    """Run-time config for the Sobol workload.
+
+    The default ``n_base_samples`` is intentionally tiny so a single
+    partition materialises in seconds for local ``dagster dev`` smoke
+    tests. The real full-scale value (e.g. 8192) is supplied at NRP
+    submission via ``scripts/submit_sobol.py --n-base-samples``.
+    """
+
+    n_base_samples: int = 16
+    seed: int = 42
+    window_start: str = sobol.DEFAULT_WINDOW[0]
+    window_end: str = sobol.DEFAULT_WINDOW[1]
+    # Optional explicit parquet path; falls back to the repo data/ dir.
+    parquet_path: str | None = None
+
+
+def _parquet_path(cfg: SobolConfig) -> Path:
+    return Path(cfg.parquet_path) if cfg.parquet_path else sobol.DEFAULT_PARQUET
+
+
 @dg.asset(
     partitions_def=sobol_partitions,
     group_name="sobol_sensitivity",
     op_tags=_WORKER_K8S_TAGS,
     io_manager_key="s3_io",
-    required_resource_keys={"s3"},
 )
-def sobol_chunk_results(context: AssetExecutionContext) -> dict[str, Any]:
-    """One chunk of Sobol samples, ~1,000 forward-model evaluations.
+def sobol_chunk_results(
+    context: AssetExecutionContext,
+    config: SobolConfig,
+) -> dg.MaterializeResult:
+    """Evaluate this chunk's slice of the Sobol sample matrix.
 
-    The IO manager (`s3_io`) handles persistence — return value lands at
-    s3://<bucket>/runs/<run_id>/sobol_chunk_results/<partition_key>.pkl
-    No manual `put_object` calls needed.
+    Deterministic: the full Saltelli matrix is regenerated from
+    ``(n_base_samples, seed)`` and sliced by this partition's index, so
+    every worker and the aggregator agree on row order without sharing
+    state. The IO manager (``s3_io``) persists the return value; no
+    manual S3 calls. Returns ``MaterializeResult`` so per-chunk
+    observability metadata lands in the Dagster UI.
     """
-    chunk_id = context.partition_key
-    log.info("running sobol chunk: %s", chunk_id)
+    chunk_idx = int(context.partition_key.split("_")[1])
+    samples = sobol.build_samples(config.n_base_samples, seed=config.seed)
+    bounds = sobol.chunk_bounds(samples.shape[0], N_SOBOL_CHUNKS)
+    start, end = bounds[chunk_idx]
+    log.info(
+        "sobol chunk %s: rows [%d, %d) of %d",
+        context.partition_key,
+        start,
+        end,
+        samples.shape[0],
+    )
 
-    # === implementation goes here ===
-    # 1. Pull Sobol sample matrix slice for this chunk
-    # 2. For each sample row, evaluate the forward model via tijuana_dispersion
-    # 3. Compute per-sample fit metrics (RMS, corr, peak ratio per receptor)
-    # 4. Return a dict (or pyarrow Table) — IO manager handles the write
+    if start == end:
+        # Empty chunk (n_samples < N_SOBOL_CHUNKS): valid, returns no rows.
+        return dg.MaterializeResult(
+            value={"start": start, "end": end, "param_names": [], "metric_columns": [], "rows": []},
+            metadata={"n_samples": 0, "row_start": start, "row_end": end},
+        )
 
-    raise NotImplementedError(
-        "Sobol chunk worker not yet implemented. See nrp/issues/sobol_nrp.md."
+    df = sobol.load_window(_parquet_path(config), (config.window_start, config.window_end))
+    drivers, met, _hours = sobol.make_drivers_and_met(df)
+    obs = sobol.build_obs(df, _hours, sobol.RECEPTOR_NAMES)
+    if not drivers:
+        raise ValueError("No valid driver/met rows in the window — cannot evaluate samples.")
+
+    problem = sobol.build_problem()
+    rows: list[dict[str, float]] = []
+    for global_idx in range(start, end):
+        metrics = sobol.evaluate_sample(samples[global_idx], problem["names"], drivers, met, obs)
+        rows.append({"_row": global_idx, **metrics})
+
+    return dg.MaterializeResult(
+        value={
+            "start": start,
+            "end": end,
+            "param_names": problem["names"],
+            "metric_columns": sobol.OUTPUT_COLUMNS,
+            "rows": rows,
+        },
+        metadata={
+            "n_samples": len(rows),
+            "row_start": start,
+            "row_end": end,
+            "n_hours": len(drivers),
+        },
     )
 
 
 @dg.asset(
-    deps=[sobol_chunk_results],
     group_name="sobol_sensitivity",
     op_tags=_AGGREGATOR_K8S_TAGS,
     io_manager_key="s3_io",
-    required_resource_keys={"s3", "slack"},
+    required_resource_keys={"slack"},
+    ins={
+        "chunks": dg.AssetIn(
+            "sobol_chunk_results",
+            partition_mapping=dg.AllPartitionMapping(),
+        ),
+    },
 )
-def sobol_aggregate(context: AssetExecutionContext) -> dict[str, Any]:
-    """Combine all Sobol chunk parquets and compute first-order + total Sobol indices.
+def sobol_aggregate(
+    context: AssetExecutionContext,
+    chunks: dict[str, dict[str, Any]],
+) -> dg.MaterializeResult:
+    """Reassemble all chunk outputs in sample order and run SALib Sobol.
 
-    Reads every partition of sobol_chunk_results from S3, concatenates,
-    runs SALib's Sobol analysis, writes the indices parquet. On completion,
-    sends a watch-tier Slack message with the result location and top
-    sensitivities.
+    ``chunks`` is ``{partition_key: chunk_value}`` for every partition,
+    loaded via the IO manager (local filesystem or S3 depending on env).
+    The full output vector must be in the exact Saltelli row order for
+    each metric column, so we place each chunk's rows at their recorded
+    global indices and refuse to analyse a partial matrix.
     """
     slack: SlackWebhookResource = context.resources.slack
 
-    # === implementation goes here ===
-    # 1. Load all partition outputs (Dagster's IO manager handles this)
-    # 2. Run SALib Sobol analysis
-    # 3. Persist indices
+    asm = sobol.reassemble(chunks)
+    param_names = asm["param_names"]
+    problem = sobol.build_problem()
+    frames: list[Any] = []
+    for m in asm["metric_columns"]:
+        col = asm["y_by_metric"][m]
+        # SALib cannot take NaN; rms__<receptor> is NaN only when that
+        # receptor lacked obs in the window (whole column NaN) — skip it.
+        if np.isnan(col).any():
+            log.warning("metric %s has NaNs; skipping its Sobol analysis", m)
+            continue
+        res = sobol.analyze(problem, col)
+        res.insert(0, "metric", m)
+        frames.append(res)
 
-    # Notify on completion (watch tier — informational)
+    indices = pd.concat(frames, ignore_index=True)
+    top = indices.sort_values("ST", ascending=False).head(1).iloc[0]
+
     slack.watch(
         f":bar_chart: Sobol sensitivity complete (run {context.run_id[:8]})\n"
-        f"Top sensitivity: f_arch_estuary (S_T = TBD)\n"
-        f"Results: s3://<bucket>/runs/{context.run_id}/sobol_aggregate/"
+        f"Samples: {asm['n_samples']} | metrics: {len(frames)}\n"
+        f"Top total-order sensitivity: {top['parameter']} "
+        f"(S_T={top['ST']:.3f} on {top['metric']})",
     )
 
-    raise NotImplementedError("Sobol aggregator not yet implemented. See nrp/issues/sobol_nrp.md.")
+    return dg.MaterializeResult(
+        value={"indices": indices.to_dict(orient="records")},
+        metadata={
+            "n_samples": asm["n_samples"],
+            "n_metrics_analysed": len(frames),
+            "n_parameters": len(param_names),
+            "top_parameter": str(top["parameter"]),
+            "top_ST": float(top["ST"]),
+            "top_metric": str(top["metric"]),
+            "indices_preview": dg.MetadataValue.md(
+                indices.sort_values("ST", ascending=False).head(10).to_markdown(index=False),
+            ),
+        },
+    )
 
 
 # ============================================================
@@ -237,7 +338,7 @@ def nrp_run_failure_to_slack(context: RunFailureSensorContext) -> None:
         f"Job: {run.job_name}\n"
         f"Run ID: {run.run_id[:8]}\n"
         f"Error: {error_msg}\n"
-        f"Dagster UI: <see Dagster instance>"
+        f"Dagster UI: <see Dagster instance>",
     )
 
 
@@ -285,21 +386,34 @@ defs = dg.Definitions(
             endpoint_url=dg.EnvVar("S3_ENDPOINT_URL"),
             region_name=dg.EnvVar("AWS_DEFAULT_REGION"),
         ),
-        # IO manager for asset persistence — all assets with `io_manager_key="s3_io"`
-        # automatically read/write through this.
-        "s3_io": S3PickleIOManager(
-            s3_resource=S3Resource(
-                aws_access_key_id=dg.EnvVar("AWS_ACCESS_KEY_ID"),
-                aws_secret_access_key=dg.EnvVar("AWS_SECRET_ACCESS_KEY"),
-                endpoint_url=dg.EnvVar("S3_ENDPOINT_URL"),
-            ),
-            s3_bucket=dg.EnvVar("DAGSTER_S3_BUCKET"),
-            s3_prefix="dagster/runs",
+        # IO manager for asset persistence. On NRP (DAGSTER_S3_BUCKET set)
+        # this is S3; locally it falls back to a filesystem IO manager so
+        # `dagster dev` / `dg launch` work end-to-end without S3.
+        "s3_io": (
+            S3PickleIOManager(
+                s3_resource=S3Resource(
+                    aws_access_key_id=dg.EnvVar("AWS_ACCESS_KEY_ID"),
+                    aws_secret_access_key=dg.EnvVar("AWS_SECRET_ACCESS_KEY"),
+                    endpoint_url=dg.EnvVar("S3_ENDPOINT_URL"),
+                ),
+                s3_bucket=dg.EnvVar("DAGSTER_S3_BUCKET"),
+                s3_prefix="dagster/runs",
+            )
+            if os.getenv("DAGSTER_S3_BUCKET")
+            else dg.FilesystemIOManager(
+                base_dir=os.getenv(
+                    "DAGSTER_LOCAL_IO_DIR",
+                    str(Path(__file__).resolve().parent.parent / ".dagster_io"),
+                ),
+            )
         ),
-        # Slack webhook sender. Reuses the same env vars as the existing alert system.
+        # Slack webhook sender. Reuses the same env vars as the existing
+        # alert system. Optional: os.getenv with a "" default so the
+        # resource initialises locally (the sender logs+drops on an empty
+        # URL) instead of failing EnvVar resolution when unset.
         "slack": SlackWebhookResource(
-            watch_webhook_url=dg.EnvVar("SLACK_WEBHOOK_WATCH"),
-            critical_webhook_url=dg.EnvVar("SLACK_WEBHOOK_CRITICAL"),
+            watch_webhook_url=os.getenv("SLACK_WEBHOOK_WATCH", ""),
+            critical_webhook_url=os.getenv("SLACK_WEBHOOK_CRITICAL", ""),
         ),
     },
     # Use K8s step executor when KUBERNETES_SERVICE_HOST is set (in-cluster or
@@ -313,9 +427,9 @@ defs = dg.Definitions(
             "service_account_name": "dagster-nrp",
             "max_concurrent": 100,
             "load_incluster_config": os.path.exists(
-                "/var/run/secrets/kubernetes.io/serviceaccount/token"
+                "/var/run/secrets/kubernetes.io/serviceaccount/token",
             ),
-        }
+        },
     )
     if os.getenv("KUBERNETES_SERVICE_HOST")
     else dg.multiprocess_executor,

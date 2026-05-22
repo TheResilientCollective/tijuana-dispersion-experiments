@@ -1,5 +1,4 @@
-"""
-Static check: enforce 'no simulated/mock/fake data outside tests'.
+"""Static check: enforce 'no simulated/mock/fake data outside tests'.
 
 This is the most important rule in the project. Research findings made on
 synthetic data that was supposed to be real are how careers end.
@@ -68,7 +67,7 @@ class MockDataVisitor(ast.NodeVisitor):
                         node.lineno,
                         f"function '{node.name}' has a suspicious name "
                         f"(contains '{pat}'); rename or move to tests/",
-                    )
+                    ),
                 )
         self.generic_visit(node)
 
@@ -93,7 +92,7 @@ class MockDataVisitor(ast.NodeVisitor):
                                 f"If this is legitimate sampling (LHS, MCMC init), add "
                                 f"'# noqa: mock-check <reason>' on this line and prefer "
                                 f"np.random.default_rng().",
-                            )
+                            ),
                         )
         self.generic_visit(node)
 

@@ -36,9 +36,6 @@ data/*.parquet
 data/*.csv
 data/*.json
 
-# Experiment outputs — reproducible from run.py, never committed
-experiments/*/output/
-experiments/**/output/
 
 # Notebook artifacts (nbstripout handles outputs in source; this catches checkpoints)
 .ipynb_checkpoints/

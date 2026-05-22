@@ -32,6 +32,51 @@ search — it is in fact our primary, best-fit receptor.)
 
 ---
 
+## 2026-05-22 — sobol_full at N=8192 on NRP (converged variance decomposition; LHS Pearson corrected)
+
+**Question**: variance decomposition of the 11 emission parameters
+across 3 receptors × 3 fit metrics, at the design scale (N=8192,
+106 496 Saltelli samples) — the first NRP-side workload graduating
+from a Pearson-correlation proxy to proper Sobol indices.
+
+**Result**: Converged (`ST_conf/|ST|` median 0.15, p90 0.26, zero
+negative-S1 rows). Two clean patterns:
+**(A)** *magnitude* fit (rms, peak_ratio) at every receptor is
+dominated by **`substrate_threshold`** (ST ≈ 0.44, S1 ≈ 0.14 — i.e.
+*interaction-dominated*; the LHS Pearson proxy systematically
+underestimated it ~3×), then `baseline_scale` (ST 0.35), then `T_ref_c`
+(ST 0.28). **(B)** *shape* fit (`corr__*`) is dominated by
+**`diel_phase_hours`**, largely first-order (S1 0.61 → ST 0.77 at
+Berry — the single largest index in the whole 11×9 table). Dead
+parameter: **`f_arch_bay`** ST ≈ 5×10⁻⁶ (drop from future
+calibrations); `f_arch_channel` ST 0.009 borderline. Geographic:
+`f_arch_estuary` is mid-pack everywhere except IB CIVIC CTR (ST 0.36),
+where the estuary outlets sit closest — Sobol localises a finding the
+LHS Pearson reported as global.
+
+**State change**: The 2026-05-05 LHS Pearson approximation said
+`f_arch_estuary` was the *dominant* sensitivity (Pearson r = −0.64 vs
+Berry `corr`). That was a univariate artifact: Sobol places
+`f_arch_estuary` mid-pack at Berry (ST 0.12) and replaces it with
+`diel_phase_hours` (ST 0.77). The substrate parameters, which the
+attribution experiment found weak as solo Spearman drivers (< 0.11),
+are the most influential magnitude-fit parameters globally *through
+interactions* — both findings are true under their framings;
+substrate is non-univariate, not unhelpful. The Q10/temperature
+finding from attribution is *regime-conditional*: Sobol over the full
+window dilutes it (`Q10` ST ≈ 0.04), but the attribution-on-stagnation
+result stands. Future calibrations should use regime-conditional Sobol.
+
+**Next**: (1) drop `f_arch_bay` (and consider `f_arch_channel`) from
+the parameter set to 9–10 free params; (2) regime-conditional Sobol
+(stagnation vs advective) at the same N to resolve the Q10/substrate
+framings; (3) postmortem PR for the two NRP-run papercuts surfaced
+(submit-script default of N=16 letting a smoke run masquerade as the
+real one; fetcher's S3 path template assumed a non-existent run-id
+segment).
+
+---
+
 ## 2026-05-16 — event_trigger_magnitude (capstone: exogenous magnitude is unreachable)
 
 **Question**: box→driver ranks calm nights but recall@100 = 0. Does an

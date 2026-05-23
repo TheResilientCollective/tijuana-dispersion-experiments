@@ -1,0 +1,22 @@
+# Six-window Sobol sweep — input for `submit_sobol.py --windows-file ...`.
+#
+# Each window is chosen for a specific cross-window test (H1-H6 in
+# README.md). Dates are inclusive `start`, exclusive `end` (the
+# load_window convention). At N=8192 each window is ~30 min on NRP →
+# ~3 h total wall-time sequential.
+#
+#   uv run python nrp/scripts/submit_sobol.py \
+#     --windows-file experiments/2026-05-22_multi_window_sobol/windows.yaml
+windows:
+  - { start: "2025-09-01", end: "2025-09-04",
+      note: "summer high-temp (3-day mean 22.3 C, peak 27.1 C) — H4 Q10 test" }
+  - { start: "2025-12-20", end: "2025-12-24",
+      note: "December event cluster — 4 events, peak 175 ppb on Dec 21" }
+  - { start: "2026-02-08", end: "2026-02-11",
+      note: "winter storm — different SBIWTP throughput regime; H6 test" }
+  - { start: "2026-03-13", end: "2026-03-16",
+      note: "advective baseline (the existing Sobol — anchor for the comparison)" }
+  - { start: "2026-04-04", end: "2026-04-08",
+      note: "April peak events — all-time max 752 ppb (Apr 4-5), 542 ppb (Apr 6), 361 ppb (Apr 7-8)" }
+  - { start: "2026-05-10", end: "2026-05-14",
+      note: "calm-night Berry events — May 10-11 (177 ppb) + May 12-13 (203 ppb)" }

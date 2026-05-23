@@ -262,6 +262,137 @@ def sobol_aggregate(
     )
 
 
+@dg.asset(
+    group_name="sobol_sensitivity",
+    op_tags=_AGGREGATOR_K8S_TAGS,
+    io_manager_key="s3_io",
+    required_resource_keys={"s3"},
+    ins={"sobol_aggregate": dg.AssetIn("sobol_aggregate")},
+)
+def sobol_post_analysis(
+    context: AssetExecutionContext,
+    config: SobolConfig,
+    sobol_aggregate: dict[str, Any],
+) -> dg.MaterializeResult:
+    """Post-analysis + archival snapshot for a Sobol run.
+
+    Computes the diagnostics an operator would otherwise have to run
+    by hand against the bucket: convergence telemetry, per-metric
+    top-N, global parameter ranking, magnitude-vs-shape decomposition,
+    interaction table, dropout candidates (flagged as
+    *window-specific* — a single run cannot establish global
+    inertness, see calibration_status 2026-05-22).
+
+    Persists a per-run archival snapshot to
+    ``s3://<bucket>/runs/{tag}/`` (separate from the IO manager's
+    asset-keyed "latest" pointer at ``dagster/runs/sobol_aggregate``)
+    so multi-window / multi-seed studies do not overwrite each other.
+    Returns ``MaterializeResult`` with the headline numbers surfaced
+    as Dagster UI metadata.
+    """
+    import io
+    import json as _json
+
+    indices = pd.DataFrame(sobol_aggregate["indices"])
+
+    diag = sobol.convergence_diagnostics(indices)
+    glob = sobol.global_ranking(indices)
+    topn = sobol.top_n_per_metric(indices, n=5)
+    splits = sobol.magnitude_vs_shape_split(indices)
+    inter = sobol.interaction_table(indices)
+    drops = sobol.dropout_candidates(indices)
+
+    tag = sobol.run_tag(
+        config.window_start,
+        config.window_end,
+        config.n_base_samples,
+        config.seed,
+    )
+
+    # ----- archival snapshot to s3://<bucket>/runs/{tag}/ -----
+    bucket = os.getenv("DAGSTER_S3_BUCKET")
+    archived: dict[str, str] = {}
+    if bucket:
+        s3 = context.resources.s3.get_client()  # boto3 client
+        prefix = f"runs/{tag}"
+        # 1) indices, full table
+        buf_p = io.BytesIO()
+        indices.to_parquet(buf_p, index=False)
+        s3.put_object(Bucket=bucket, Key=f"{prefix}/sobol_indices.parquet", Body=buf_p.getvalue())
+        archived["indices"] = f"s3://{bucket}/{prefix}/sobol_indices.parquet"
+        # 2) diagnostics + summaries, machine-readable
+        analysis = {
+            "tag": tag,
+            "window": [config.window_start, config.window_end],
+            "n_base_samples": config.n_base_samples,
+            "seed": config.seed,
+            "convergence": diag,
+            "global_ranking": glob.to_dict(orient="records"),
+            "top_n_per_metric": topn.to_dict(orient="records"),
+            "magnitude_top": splits["magnitude"].to_dict(orient="records"),
+            "shape_top": splits["shape"].to_dict(orient="records"),
+            "interaction_table": inter.to_dict(orient="records"),
+            "dropout_candidates_window_specific": drops,
+        }
+        s3.put_object(
+            Bucket=bucket,
+            Key=f"{prefix}/analysis.json",
+            Body=_json.dumps(analysis, indent=2).encode(),
+        )
+        archived["analysis"] = f"s3://{bucket}/{prefix}/analysis.json"
+        # 3) human-readable summary
+        md = (
+            f"# Sobol run `{tag}`\n\n"
+            f"window: **{config.window_start} → {config.window_end}** | "
+            f"N={config.n_base_samples} | seed={config.seed}\n\n"
+            f"**Converged: {diag['is_converged']}** "
+            f"(median ST_conf/|ST| {diag['st_conf_over_st_median']:.3f}, "
+            f"p90 {diag['st_conf_over_st_p90']:.3f}, "
+            f"negative-S1 rows {diag['rows_with_negative_s1']})\n\n"
+            f"## Global ranking (mean ST)\n\n"
+            f"{glob.to_markdown(index=False)}\n\n"
+            f"## Magnitude fit (rms / peak_ratio)\n\n"
+            f"{splits['magnitude'].head(8).to_markdown(index=False)}\n\n"
+            f"## Shape fit (corr)\n\n"
+            f"{splits['shape'].head(8).to_markdown(index=False)}\n\n"
+            f"## Top-5 by ST per metric\n\n"
+            f"{topn.to_markdown(index=False)}\n\n"
+            f"## Window-specific dropout candidates "
+            f"(NOT global — need multi-window confirmation)\n\n"
+            f"{drops or '(none)'}\n"
+        )
+        s3.put_object(Bucket=bucket, Key=f"{prefix}/summary.md", Body=md.encode())
+        archived["summary"] = f"s3://{bucket}/{prefix}/summary.md"
+    else:
+        # No S3 — local dev / smoke. Skip archival; analysis is still
+        # in MaterializeResult metadata + the asset's IO-manager value.
+        log.info("DAGSTER_S3_BUCKET unset; skipping archival write to runs/%s/", tag)
+
+    # ----- MaterializeResult: surface headline in Dagster UI -----
+    return dg.MaterializeResult(
+        value={
+            "tag": tag,
+            "convergence": diag,
+            "global_ranking": glob.to_dict(orient="records"),
+            "top_n_per_metric": topn.to_dict(orient="records"),
+            "dropout_candidates_window_specific": drops,
+            "archived": archived,
+        },
+        metadata={
+            "tag": tag,
+            "converged": diag["is_converged"],
+            "st_conf_over_st_median": diag["st_conf_over_st_median"],
+            "rows_with_negative_s1": diag["rows_with_negative_s1"],
+            "n_parameters": len(glob),
+            "dropout_candidates_window_specific": ", ".join(drops) if drops else "(none)",
+            "global_ranking_preview": dg.MetadataValue.md(glob.head(11).to_markdown(index=False)),
+            "archived_snapshot": dg.MetadataValue.md(
+                "\n".join(f"- `{k}`: `{v}`" for k, v in archived.items()) or "(no S3 archive)",
+            ),
+        },
+    )
+
+
 # ============================================================
 # MCMC workload (placeholder — implemented after Sobol is healthy)
 # ============================================================
@@ -364,10 +495,22 @@ def nrp_run_start_to_slack(context: RunStatusSensorContext) -> None:
 # these with imports from tj_h2s_prediction.resources and remove resources.py.
 # Asset code stays the same — it only references resource keys.
 
+# Explicit job for "materialise sobol_aggregate + sobol_post_analysis"
+# so submit_sobol.py can launch them by a stable jobName via the
+# Dagster GraphQL API (rather than depending on the implicit
+# `__ASSET_JOB`). Discoverable in `dg list defs` and the UI.
+sobol_aggregate_job = dg.define_asset_job(
+    name="sobol_aggregate_job",
+    selection=dg.AssetSelection.assets("sobol_aggregate", "sobol_post_analysis"),
+)
+
+
 defs = dg.Definitions(
+    jobs=[sobol_aggregate_job],
     assets=[
         sobol_chunk_results,
         sobol_aggregate,
+        sobol_post_analysis,
         mcmc_chain_results,
         mcmc_aggregate,
         cv_fold_results,

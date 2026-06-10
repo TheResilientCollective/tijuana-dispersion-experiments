@@ -29,6 +29,7 @@ without the service. ``dg list defs`` likewise works service-free.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -416,3 +417,202 @@ def analyze(problem: dict[str, Any], y: np.ndarray) -> pd.DataFrame:
             "ST_conf": res["ST_conf"],
         },
     )
+
+
+# ---------- post-analysis helpers (pure; CI-testable) ---------- #
+#
+# These are the diagnostics + summaries the operator wants AT THE END
+# of every NRP Sobol run (rather than running them by hand against the
+# bucket each time). The Dagster `sobol_post_analysis` asset glues
+# these into the pipeline; nothing here imports Dagster, so they are
+# unit-tested without the service or the orchestrator.
+
+
+def convergence_diagnostics(indices: pd.DataFrame) -> dict[str, Any]:
+    """Convergence telemetry — would have caught the smoke-as-real bug.
+
+    Computes the headline diagnostics for an indices table:
+    - ``ST_conf / |ST|`` median + p90 (the standard "is it converged?"
+      ratio; conventional acceptance threshold is < 0.20 median).
+    - count of rows with ``S1 < -0.01`` (true S1 ≥ 0 by definition;
+      strongly-negative values are the small-sample Saltelli noise
+      signature).
+    - ``is_converged`` heuristic: median ratio < 0.20 AND zero
+      strongly-negative S1.
+
+    Reasonable expectations: at N=8192 we observe median ≈ 0.15,
+    zero negatives; at N≈23 (smoke) median ≈ 1.5, ~40 % negative.
+    """
+    if indices.empty:
+        return {"n_rows": 0, "is_converged": False}
+    ratio = indices["ST_conf"].abs() / indices["ST"].abs().clip(lower=1e-9)
+    neg_s1 = int((indices["S1"] < -0.01).sum())
+    median_ratio = float(ratio.median())
+    return {
+        "n_rows": len(indices),
+        "st_conf_over_st_median": round(median_ratio, 4),
+        "st_conf_over_st_p90": round(float(ratio.quantile(0.9)), 4),
+        "rows_with_negative_s1": neg_s1,
+        "max_st_conf": round(float(indices["ST_conf"].max()), 4),
+        "is_converged": bool(median_ratio < 0.20 and neg_s1 == 0),
+    }
+
+
+def global_ranking(indices: pd.DataFrame) -> pd.DataFrame:
+    """Per-parameter ranking aggregated across all metric columns.
+
+    Returns columns ``mean_ST, median_ST, max_ST, mean_S1``, sorted
+    descending by ``mean_ST``. Use ``mean_ST`` for a "broad
+    importance" view (smooths receptor- and metric-specific
+    sensitivities) and ``max_ST`` to surface parameters that matter
+    *somewhere* even if they're inert globally.
+    """
+    g = (
+        indices.groupby("parameter")
+        .agg(
+            mean_ST=("ST", "mean"),
+            median_ST=("ST", "median"),
+            max_ST=("ST", "max"),
+            mean_S1=("S1", "mean"),
+        )
+        .sort_values("mean_ST", ascending=False)
+        .reset_index()
+    )
+    return g
+
+
+def top_n_per_metric(indices: pd.DataFrame, n: int = 5) -> pd.DataFrame:
+    """Top-``n`` parameters by ``ST`` for each metric column.
+
+    Long-form output ``(metric, rank, parameter, S1, ST, ST_conf)``
+    suitable for direct UI rendering or markdown dumping.
+    """
+    rows: list[dict[str, Any]] = []
+    for m, sub in indices.groupby("metric", sort=True):
+        top = sub.sort_values("ST", ascending=False).head(n)
+        for rank, (_, r) in enumerate(top.iterrows(), start=1):
+            rows.append(
+                {
+                    "metric": m,
+                    "rank": rank,
+                    "parameter": r["parameter"],
+                    "S1": float(r["S1"]),
+                    "ST": float(r["ST"]),
+                    "ST_conf": float(r["ST_conf"]),
+                },
+            )
+    return pd.DataFrame(rows)
+
+
+def magnitude_vs_shape_split(indices: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Split the metric kinds into magnitude (rms/peak_ratio) vs shape
+    (corr) and rank parameters in each group.
+
+    Captures the canonical decomposition the calibration arc surfaced:
+    magnitude fit is interaction-dominated by ``substrate_threshold``
+    + ``baseline_scale`` + ``T_ref_c``; shape fit is dominated by
+    ``diel_phase_hours`` largely first-order. Returns
+    ``{"magnitude": …, "shape": …}`` each a global_ranking-shaped frame.
+    """
+    is_mag = indices["metric"].str.startswith(("rms__", "peak_ratio__"))
+    return {
+        "magnitude": global_ranking(indices[is_mag]),
+        "shape": global_ranking(indices[~is_mag]),
+    }
+
+
+def interaction_table(indices: pd.DataFrame, min_interaction: float = 0.10) -> pd.DataFrame:
+    """Rows where the interaction-mediated effect (``ST - S1``) is
+    materially large. These are parameters whose univariate
+    correlation (which is all a Pearson/LHS proxy can see) understates
+    their true variance contribution.
+
+    The N=8192 NRP run found ``substrate_threshold`` with
+    ``ST - S1 ≈ 0.30`` at every magnitude metric — that's the canonical
+    example of the LHS-Pearson 3× underestimate.
+    """
+    df = indices.assign(interaction=indices["ST"] - indices["S1"])
+    return (
+        df[df["interaction"] > min_interaction]
+        .sort_values("interaction", ascending=False)
+        .reset_index(drop=True)
+    )
+
+
+def dropout_candidates(indices: pd.DataFrame, max_st_threshold: float = 0.02) -> list[str]:
+    """Parameters whose ``max ST`` across all metrics is below the
+    threshold — i.e. they don't influence ANY fit metric at any
+    receptor IN THIS WINDOW.
+
+    Reported only as candidates: a single-window Sobol cannot
+    establish global inertness. ``f_arch_bay`` was flagged here at
+    N=8192 on the Mar 13-15 window (max ST ≈ 5e-6) but should be
+    re-checked across other windows / regimes before being permanently
+    removed from the calibration parameter set.
+    """
+    if indices.empty:
+        return []
+    max_st = indices.groupby("parameter")["ST"].max()
+    return sorted(max_st[max_st < max_st_threshold].index.tolist())
+
+
+@dataclass(frozen=True)
+class Window:
+    """One fit window for a Sobol sweep."""
+
+    start: str
+    end: str
+    note: str = ""
+
+
+def load_windows(path: Path) -> list[Window]:
+    """Parse + validate a bulk-windows YAML file (consumed by
+    ``submit_sobol.py --windows-file``).
+
+    Schema::
+
+        windows:
+          - { start: "YYYY-MM-DD", end: "YYYY-MM-DD", note?: "..." }
+          - ...
+
+    Raises ``ValueError`` on any schema violation so the submitter
+    fails loudly before launching anything.
+    """
+    import yaml
+
+    raw = yaml.safe_load(path.read_text())
+    if not isinstance(raw, dict) or "windows" not in raw:
+        raise ValueError(f"{path}: top-level must be a mapping with a 'windows' list")
+    wlist = raw["windows"]
+    if not isinstance(wlist, list) or not wlist:
+        raise ValueError(f"{path}: 'windows' must be a non-empty list")
+    out: list[Window] = []
+    for i, w in enumerate(wlist):
+        if not isinstance(w, dict):
+            raise ValueError(f"{path}: windows[{i}] must be a mapping; got {type(w).__name__}")
+        if "start" not in w or "end" not in w:
+            raise ValueError(f"{path}: windows[{i}] missing 'start' and/or 'end'")
+        out.append(Window(start=str(w["start"]), end=str(w["end"]), note=str(w.get("note", ""))))
+    return out
+
+
+def run_tag(
+    window_start: str,
+    window_end: str,
+    n_base_samples: int,
+    seed: int,
+    run_date: str | None = None,
+) -> str:
+    """Deterministic, human-readable archival tag.
+
+    Returns e.g. ``2026-03-13_2026-03-16_N8192_seed42_2026-05-22``.
+    Used to scope a run's archival snapshot under
+    ``s3://<bucket>/runs/{tag}/...`` (separate from the IO-manager's
+    asset-keyed "latest run" pointer at ``dagster/runs/...``), so
+    multi-window / multi-seed studies don't overwrite each other.
+    """
+    if run_date is None:
+        from datetime import UTC, datetime
+
+        run_date = datetime.now(UTC).date().isoformat()
+    return f"{window_start}_{window_end}_N{n_base_samples}_seed{seed}_{run_date}"

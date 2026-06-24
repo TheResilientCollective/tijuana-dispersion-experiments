@@ -1,12 +1,14 @@
-.PHONY: help docker-login docker-build docker-push docker-clean docker-build-push docker-tags
+.PHONY: help docker-login docker-build docker-push docker-clean docker-build-push docker-tags docker-digest
 
-# GitLab registry authentication.
-# Option 1 (interactive): make docker-login
-# Option 2 (env vars):   GITLAB_USERNAME=<user> GITLAB_TOKEN=<pat> make docker-push
-#   where <pat> is a GitLab personal access token with 'write_registry' scope
-# Option 3 (cached):     docker login gitlab-registry.nrp-nautilus.io (once; cached in ~/.docker/config.json)
+# GitLab registry authentication — NRP-specific setup.
+# Prerequisites:
+#   1. source nrp/env.sh          (loads GITLAB_USER, GITLAB_TOKEN, GH_TOKEN)
+#   2. make docker-login          (authenticate to registry)
+#   3. make docker-push           (build + push to gitlab-registry.nrp-nautilus.io)
+#
+# NRP requirement: builds use --platform linux/amd64 (NRP nodes are amd64;
+# Apple Silicon builds arm64 without this, which fails on NRP).
 
-# NRP container repository
 REGISTRY := gitlab-registry.nrp-nautilus.io
 ORG := ucsd-center4health
 IMAGE := nrp-worker
@@ -19,41 +21,51 @@ GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD)
 IMAGE_TAG_SHA := $(REGISTRY)/$(ORG)/$(IMAGE):$(GIT_SHA)
 IMAGE_TAG_DEV := $(REGISTRY)/$(ORG)/$(IMAGE):dev
 
-# Default: show help
 help:
-	@echo "NRP Docker build targets:"
-	@echo "  make docker-login     Login to GitLab registry"
-	@echo "  make docker-build     Build image (tags: $(GIT_SHA), dev)"
-	@echo "  make docker-push      Push to GitLab registry (requires auth)"
-	@echo "  make docker-build-push  Build and push (same command)"
-	@echo "  make docker-clean     Remove local images"
-	@echo "  make docker-tags      Show image tags (no build)"
+	@echo "NRP Docker build + push (GitLab registry)"
 	@echo ""
-	@echo "Environment:"
+	@echo "Setup (one-time):"
+	@echo "  source nrp/env.sh              Load GitLab creds + GH token"
+	@echo ""
+	@echo "Build & push:"
+	@echo "  make docker-login              Authenticate to $(REGISTRY)"
+	@echo "  make docker-build              Build image ($(GIT_SHA), dev)"
+	@echo "  make docker-push               Build + push both tags"
+	@echo "  make docker-build-push         Alias for docker-push"
+	@echo "  make docker-digest             Show digest after push"
+	@echo ""
+	@echo "Cleanup:"
+	@echo "  make docker-clean              Remove local images"
+	@echo "  make docker-tags               Show image tags (no build)"
+	@echo ""
+	@echo "NRP environment:"
 	@echo "  Registry: $(REGISTRY)"
 	@echo "  Organization: $(ORG)"
 	@echo "  Image: $(IMAGE)"
 	@echo "  Git SHA: $(GIT_SHA)"
-	@echo "  Branch: $(GIT_BRANCH)"
+	@echo "  Platform: linux/amd64 (required for NRP)"
 
-# Login to GitLab container registry.
-# Uses GITLAB_USERNAME and GITLAB_TOKEN env vars if set; otherwise prompts interactively.
 docker-login:
-	@if [ -z "$(GITLAB_USERNAME)" ] || [ -z "$(GITLAB_TOKEN)" ]; then \
-		echo "Logging into $(REGISTRY)..."; \
-		docker login $(REGISTRY); \
-	else \
-		echo "Using GITLAB_USERNAME and GITLAB_TOKEN env vars..."; \
-		echo "$(GITLAB_TOKEN)" | docker login -u "$(GITLAB_USERNAME)" --password-stdin $(REGISTRY); \
+	@if [ -z "$(GITLAB_USER)" ] || [ -z "$(GITLAB_TOKEN)" ]; then \
+		echo "❌ GITLAB_USER or GITLAB_TOKEN not set"; \
+		echo "   Run: source nrp/env.sh"; \
+		exit 1; \
 	fi
-	@echo "✓ Logged in to $(REGISTRY)"
+	@echo "Logging into $(REGISTRY)..."
+	@echo "$(GITLAB_TOKEN)" | docker login -u "$(GITLAB_USER)" --password-stdin $(REGISTRY)
+	@echo "✓ Logged in"
 
-# Build the NRP worker image with BuildKit (required for --mount=type=secret).
-# Requires GH_TOKEN env var for accessing private tijuana-dispersion repo.
 docker-build:
-	@echo "Building $(IMAGE_TAG_SHA)..."
+	@if [ -z "$(GH_TOKEN)" ]; then \
+		echo "❌ GH_TOKEN not set (needed for private tijuana-dispersion dep)"; \
+		echo "   Run: source nrp/env.sh"; \
+		exit 1; \
+	fi
+	@echo "Building $(IMAGE_TAG_SHA) (--platform linux/amd64)..."
 	DOCKER_BUILDKIT=1 docker build \
 		-f nrp/Dockerfile \
+		--platform linux/amd64 \
+		--target worker \
 		--secret id=gh_token,env=GH_TOKEN \
 		-t $(IMAGE_TAG_SHA) \
 		-t $(IMAGE_TAG_DEV) \
@@ -61,25 +73,27 @@ docker-build:
 	@echo "✓ Built: $(IMAGE_TAG_SHA)"
 	@echo "✓ Tagged: $(IMAGE_TAG_DEV)"
 
-# Push both tags to GitLab registry.
-# Ensures login before pushing.
 docker-push: docker-build docker-login
-	@echo "Pushing $(IMAGE_TAG_SHA) to $(REGISTRY)..."
+	@echo "Pushing $(IMAGE_TAG_SHA)..."
 	docker push $(IMAGE_TAG_SHA)
-	@echo "Pushing $(IMAGE_TAG_DEV) to $(REGISTRY)..."
+	@echo "Pushing $(IMAGE_TAG_DEV)..."
 	docker push $(IMAGE_TAG_DEV)
 	@echo "✓ Pushed to $(REGISTRY)/$(ORG)/$(IMAGE)"
+	@echo ""
+	@echo "📌 Next: capture the digest for DAGSTER_IMAGE:"
+	@echo "   export DAGSTER_IMAGE=$$(docker inspect --format='{{index .RepoDigests 0}}' $(IMAGE_TAG_SHA))"
 
-# Build and push in one command.
 docker-build-push: docker-push
 
-# Clean up local images.
+docker-digest:
+	@echo "Digest for $(IMAGE_TAG_SHA):"
+	@docker inspect --format='{{index .RepoDigests 0}}' $(IMAGE_TAG_SHA)
+
 docker-clean:
 	@echo "Removing local images..."
 	docker rmi -f $(IMAGE_TAG_SHA) $(IMAGE_TAG_DEV) 2>/dev/null || true
 	@echo "✓ Cleaned"
 
-# Show current tags without building.
 docker-tags:
 	@echo "Image tags (ready to build):"
 	@echo "  SHA: $(IMAGE_TAG_SHA)"

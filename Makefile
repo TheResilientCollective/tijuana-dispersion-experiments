@@ -1,4 +1,10 @@
-.PHONY: help docker-build docker-push docker-clean
+.PHONY: help docker-login docker-build docker-push docker-clean docker-build-push docker-tags
+
+# GitLab registry authentication.
+# Option 1 (interactive): make docker-login
+# Option 2 (env vars):   GITLAB_USERNAME=<user> GITLAB_TOKEN=<pat> make docker-push
+#   where <pat> is a GitLab personal access token with 'write_registry' scope
+# Option 3 (cached):     docker login gitlab-registry.nrp-nautilus.io (once; cached in ~/.docker/config.json)
 
 # NRP container repository
 REGISTRY := gitlab-registry.nrp-nautilus.io
@@ -16,10 +22,12 @@ IMAGE_TAG_DEV := $(REGISTRY)/$(ORG)/$(IMAGE):dev
 # Default: show help
 help:
 	@echo "NRP Docker build targets:"
+	@echo "  make docker-login     Login to GitLab registry"
 	@echo "  make docker-build     Build image (tags: $(GIT_SHA), dev)"
 	@echo "  make docker-push      Push to GitLab registry (requires auth)"
 	@echo "  make docker-build-push  Build and push (same command)"
 	@echo "  make docker-clean     Remove local images"
+	@echo "  make docker-tags      Show image tags (no build)"
 	@echo ""
 	@echo "Environment:"
 	@echo "  Registry: $(REGISTRY)"
@@ -27,6 +35,18 @@ help:
 	@echo "  Image: $(IMAGE)"
 	@echo "  Git SHA: $(GIT_SHA)"
 	@echo "  Branch: $(GIT_BRANCH)"
+
+# Login to GitLab container registry.
+# Uses GITLAB_USERNAME and GITLAB_TOKEN env vars if set; otherwise prompts interactively.
+docker-login:
+	@if [ -z "$(GITLAB_USERNAME)" ] || [ -z "$(GITLAB_TOKEN)" ]; then \
+		echo "Logging into $(REGISTRY)..."; \
+		docker login $(REGISTRY); \
+	else \
+		echo "Using GITLAB_USERNAME and GITLAB_TOKEN env vars..."; \
+		echo "$(GITLAB_TOKEN)" | docker login -u "$(GITLAB_USERNAME)" --password-stdin $(REGISTRY); \
+	fi
+	@echo "✓ Logged in to $(REGISTRY)"
 
 # Build the NRP worker image with BuildKit (required for --mount=type=secret).
 # Requires GH_TOKEN env var for accessing private tijuana-dispersion repo.
@@ -42,8 +62,8 @@ docker-build:
 	@echo "✓ Tagged: $(IMAGE_TAG_DEV)"
 
 # Push both tags to GitLab registry.
-# Requires GitLab registry auth (usually via 'docker login').
-docker-push: docker-build
+# Ensures login before pushing.
+docker-push: docker-build docker-login
 	@echo "Pushing $(IMAGE_TAG_SHA) to $(REGISTRY)..."
 	docker push $(IMAGE_TAG_SHA)
 	@echo "Pushing $(IMAGE_TAG_DEV) to $(REGISTRY)..."

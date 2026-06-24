@@ -103,7 +103,7 @@ dagster-user-deployments:
           memory: 512Mi
       image:
         repository: gitlab-registry.nrp-nautilus.io/ucsd-center4health/nrp-worker
-        tag: "315fdb2-pg"
+        tag: "551d97d"
         pullPolicy: IfNotPresent
       dagsterApiGrpcArgs:
         - "-m"

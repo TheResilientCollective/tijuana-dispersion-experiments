@@ -32,6 +32,30 @@ search — it is in fact our primary, best-fit receptor.)
 
 ---
 
+## 2026-06-24 — multi-window Sobol deferred; MCMC design phase begins
+
+**Question**: Can we validate the single-window Sobol sensitivities across
+6 windows (warm/cool, dry/wet seasons)?
+
+**Result**: Multi-window bulk submission encountered repeated cluster
+issues (backfill failures, incomplete chunks, port-forward instability).
+Diagnostic: 3 of 6 window backfills failed; those that completed had
+~97% of chunks. Infrastructure blockers outweigh the benefit of validation
+at this stage.
+
+**State change**: Sobol sensitivity results remain solid for the baseline
+window (2026-03-13); deferring multi-window robustness check. Pivot to
+MCMC calibration using baseline Sobol to inform parameter priors + proposal
+scaling.
+
+**Next**: Implement `mcmc_chain_results` asset. Design: sample posterior
+over the 11 parameters; use Sobol ST indices to scale the proposal distribution
+(high-ST parameters get tighter priors; low-ST get wider). Target: 4 chains ×
+10k iterations each. Evaluate convergence (Rhat, effective N_eff) + fit quality
+(LOO-CV / fold-based cross-validation).
+
+---
+
 ## 2026-05-22 — sobol_full at N=8192 on NRP (converged variance decomposition; LHS Pearson corrected)
 
 **Question**: variance decomposition of the 11 emission parameters

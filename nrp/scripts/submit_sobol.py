@@ -79,15 +79,30 @@ _RUN_TERMINAL = {"SUCCESS", "FAILURE", "CANCELED"}
 # ---------- GraphQL primitives ---------- #
 
 
-def _gql(query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
-    """One-shot GraphQL POST against the port-forwarded webserver."""
-    resp = requests.post(
-        URL,
-        json={"query": query, "variables": variables or {}},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()
+def _gql(
+    query: str, variables: dict[str, Any] | None = None, max_retries: int = 20
+) -> dict[str, Any]:
+    """GraphQL POST against the port-forwarded webserver with aggressive retry logic."""
+    for attempt in range(max_retries):
+        try:
+            resp = requests.post(
+                URL,
+                json={"query": query, "variables": variables or {}},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+            if attempt < max_retries - 1:
+                wait_s = min(30, 2 ** (attempt // 3))
+                msg = (
+                    f"  [retry {attempt + 1}/{max_retries}] connection dropped; "
+                    f"waiting {wait_s}s..."
+                )
+                print(msg, file=sys.stderr)
+                time.sleep(wait_s)
+            else:
+                raise
 
 
 def _submit_chunks_backfill(

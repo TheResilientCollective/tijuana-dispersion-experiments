@@ -24,12 +24,13 @@ IMAGE_TAG_DEV := $(REGISTRY)/$(ORG)/$(IMAGE):dev
 help:
 	@echo "NRP Docker build + push (GitLab registry)"
 	@echo ""
-	@echo "Setup (one-time):"
-	@echo "  source nrp/env.sh              Load GitLab creds + GH token"
+	@echo "Prerequisites (edit once):"
+	@echo "  nrp/.env                       Set AWS keys, Slack webhooks, Postgres password"
+	@echo "  nrp/env.sh                     Fill in GITLAB_USER and GITLAB_TOKEN (auto-sourced)"
 	@echo ""
 	@echo "Build & push:"
 	@echo "  make docker-login              Authenticate to $(REGISTRY)"
-	@echo "  make docker-build              Build image ($(GIT_SHA), dev)"
+	@echo "  make docker-build              Build image ($(GIT_SHA), dev, --platform amd64)"
 	@echo "  make docker-push               Build + push both tags"
 	@echo "  make docker-build-push         Alias for docker-push"
 	@echo "  make docker-digest             Show digest after push"
@@ -46,32 +47,32 @@ help:
 	@echo "  Platform: linux/amd64 (required for NRP)"
 
 docker-login:
-	@if [ -z "$(GITLAB_USER)" ] || [ -z "$(GITLAB_TOKEN)" ]; then \
-		echo "❌ GITLAB_USER or GITLAB_TOKEN not set"; \
-		echo "   Run: source nrp/env.sh"; \
-		exit 1; \
-	fi
-	@echo "Logging into $(REGISTRY)..."
-	@echo "$(GITLAB_TOKEN)" | docker login -u "$(GITLAB_USER)" --password-stdin $(REGISTRY)
-	@echo "✓ Logged in"
+	@bash -c 'set -a; source nrp/env.sh; set +a; \
+		if [ -z "$$GITLAB_USER" ] || [ -z "$$GITLAB_TOKEN" ]; then \
+			echo "❌ GITLAB_USER or GITLAB_TOKEN not set in nrp/env.sh"; \
+			exit 1; \
+		fi; \
+		echo "Logging into $(REGISTRY)..."; \
+		echo "$$GITLAB_TOKEN" | docker login -u "$$GITLAB_USER" --password-stdin $(REGISTRY); \
+		echo "✓ Logged in"'
 
 docker-build:
-	@if [ -z "$(GH_TOKEN)" ]; then \
-		echo "❌ GH_TOKEN not set (needed for private tijuana-dispersion dep)"; \
-		echo "   Run: source nrp/env.sh"; \
-		exit 1; \
-	fi
-	@echo "Building $(IMAGE_TAG_SHA) (--platform linux/amd64)..."
-	DOCKER_BUILDKIT=1 docker build \
-		-f nrp/Dockerfile \
-		--platform linux/amd64 \
-		--target worker \
-		--secret id=gh_token,env=GH_TOKEN \
-		-t $(IMAGE_TAG_SHA) \
-		-t $(IMAGE_TAG_DEV) \
-		.
-	@echo "✓ Built: $(IMAGE_TAG_SHA)"
-	@echo "✓ Tagged: $(IMAGE_TAG_DEV)"
+	@bash -c 'set -a; source nrp/env.sh; set +a; \
+		if [ -z "$$GH_TOKEN" ]; then \
+			echo "❌ GH_TOKEN not set in nrp/env.sh"; \
+			exit 1; \
+		fi; \
+		echo "Building $(IMAGE_TAG_SHA) (--platform linux/amd64)..."; \
+		DOCKER_BUILDKIT=1 docker build \
+			-f nrp/Dockerfile \
+			--platform linux/amd64 \
+			--target worker \
+			--secret id=gh_token,env=GH_TOKEN \
+			-t $(IMAGE_TAG_SHA) \
+			-t $(IMAGE_TAG_DEV) \
+			.; \
+		echo "✓ Built: $(IMAGE_TAG_SHA)"; \
+		echo "✓ Tagged: $(IMAGE_TAG_DEV)"'
 
 docker-push: docker-build docker-login
 	@echo "Pushing $(IMAGE_TAG_SHA)..."

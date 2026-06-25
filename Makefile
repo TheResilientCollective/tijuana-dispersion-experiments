@@ -1,67 +1,56 @@
-.PHONY: help docker-login docker-build docker-push docker-clean docker-build-push docker-tags docker-digest
+.PHONY: help docker-login docker-build docker-push docker-build-push docker-digest docker-clean docker-tags
 
-# GitLab registry authentication — NRP-specific setup.
-# Prerequisites:
-#   1. source nrp/env.sh          (loads GITLAB_USER, GITLAB_TOKEN, GH_TOKEN)
-#   2. make docker-login          (authenticate to registry)
-#   3. make docker-push           (build + push to gitlab-registry.nrp-nautilus.io)
+# NRP worker image — build on Apple Silicon, push to the NRP GitLab registry.
 #
-# NRP requirement: builds use --platform linux/amd64 (NRP nodes are amd64;
-# Apple Silicon builds arm64 without this, which fails on NRP).
+# Credentials (read automatically from nrp/.env, no manual `source` needed):
+#   GITLAB_USER, GITLAB_TOKEN   GitLab registry push (scopes: read_registry, write_registry)
+# GH_TOKEN for the private tijuana-dispersion build dep is taken from `gh auth token`.
+#
+# Quick start:
+#   make docker-build-push      # build (amd64) + login + push, all in one
+#
+# NRP requirement: --platform linux/amd64 (nodes are amd64; an Apple-Silicon
+# arm64 image fails on-cluster with "no match for platform in manifest").
 
 REGISTRY := gitlab-registry.nrp-nautilus.io
-ORG := ucsd-center4health
-IMAGE := nrp-worker
+ORG      := ucsd-center4health
+IMAGE    := nrp-worker
 
-# Git commit for versioning
 GIT_SHA := $(shell git rev-parse --short HEAD)
-GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD)
 
-# Image tags: commit SHA + dev
 IMAGE_TAG_SHA := $(REGISTRY)/$(ORG)/$(IMAGE):$(GIT_SHA)
 IMAGE_TAG_DEV := $(REGISTRY)/$(ORG)/$(IMAGE):dev
 
+# Source GitLab creds from nrp/.env; resolve GH_TOKEN from gh if unset. Used as a
+# prefix inside every recipe that talks to Docker so login + push share one shell
+# (the Docker Desktop credential store is flaky across separate shells).
+LOAD_ENV := set -a; . nrp/.env; set +a; export GH_TOKEN="$${GH_TOKEN:-$$(gh auth token 2>/dev/null)}";
+
 help:
-	@echo "NRP Docker build + push (GitLab registry)"
+	@echo "NRP worker image — build + push to $(REGISTRY)"
 	@echo ""
-	@echo "Prerequisites (edit once):"
-	@echo "  nrp/.env                       Set AWS keys, Slack webhooks, Postgres password"
-	@echo "  nrp/env.sh                     Fill in GITLAB_USER and GITLAB_TOKEN (auto-sourced)"
+	@echo "  make docker-build-push   Build (amd64) + login + push  [most common]"
+	@echo "  make docker-build        Build image only ($(GIT_SHA) + dev)"
+	@echo "  make docker-push         Login + push existing image (no rebuild)"
+	@echo "  make docker-login        Authenticate to the registry"
+	@echo "  make docker-digest       Print pushed image digest (for DAGSTER_IMAGE)"
+	@echo "  make docker-clean        Remove local image tags"
+	@echo "  make docker-tags         Print the tag names (no build)"
 	@echo ""
-	@echo "Build & push:"
-	@echo "  make docker-login              Authenticate to $(REGISTRY)"
-	@echo "  make docker-build              Build image ($(GIT_SHA), dev, --platform amd64)"
-	@echo "  make docker-push               Build + push both tags"
-	@echo "  make docker-build-push         Alias for docker-push"
-	@echo "  make docker-digest             Show digest after push"
-	@echo ""
-	@echo "Cleanup:"
-	@echo "  make docker-clean              Remove local images"
-	@echo "  make docker-tags               Show image tags (no build)"
-	@echo ""
-	@echo "NRP environment:"
-	@echo "  Registry: $(REGISTRY)"
-	@echo "  Organization: $(ORG)"
-	@echo "  Image: $(IMAGE)"
-	@echo "  Git SHA: $(GIT_SHA)"
+	@echo "  Tags:     $(IMAGE_TAG_SHA)"
+	@echo "            $(IMAGE_TAG_DEV)"
 	@echo "  Platform: linux/amd64 (required for NRP)"
 
 docker-login:
-	@bash -c 'set -a; source nrp/env.sh; set +a; \
-		if [ -z "$$GITLAB_USER" ] || [ -z "$$GITLAB_TOKEN" ]; then \
-			echo "❌ GITLAB_USER or GITLAB_TOKEN not set in nrp/env.sh"; \
-			exit 1; \
-		fi; \
-		echo "Logging into $(REGISTRY)..."; \
-		echo "$$GITLAB_TOKEN" | docker login -u "$$GITLAB_USER" --password-stdin $(REGISTRY); \
-		echo "✓ Logged in"'
+	@bash -c '$(LOAD_ENV) \
+		: "$${GITLAB_USER:?set GITLAB_USER in nrp/.env}"; \
+		: "$${GITLAB_TOKEN:?set GITLAB_TOKEN in nrp/.env}"; \
+		echo "Logging in to $(REGISTRY) as $$GITLAB_USER..."; \
+		echo "$$GITLAB_TOKEN" | docker login $(REGISTRY) -u "$$GITLAB_USER" --password-stdin'
 
 docker-build:
-	@bash -c 'set -a; source nrp/env.sh; set +a; \
-		if [ -z "$$GH_TOKEN" ]; then \
-			echo "❌ GH_TOKEN not set in nrp/env.sh"; \
-			exit 1; \
-		fi; \
+	@bash -c '$(LOAD_ENV) \
+		: "$${GH_TOKEN:?no GH_TOKEN — run: gh auth login}"; \
 		echo "Building $(IMAGE_TAG_SHA) (--platform linux/amd64)..."; \
 		DOCKER_BUILDKIT=1 docker build \
 			-f nrp/Dockerfile \
@@ -70,32 +59,36 @@ docker-build:
 			--secret id=gh_token,env=GH_TOKEN \
 			-t $(IMAGE_TAG_SHA) \
 			-t $(IMAGE_TAG_DEV) \
-			.; \
-		echo "✓ Built: $(IMAGE_TAG_SHA)"; \
-		echo "✓ Tagged: $(IMAGE_TAG_DEV)"'
+			. ; \
+		echo "Built + tagged: $(IMAGE_TAG_SHA) , :dev"'
 
-docker-push: docker-build docker-login
-	@echo "Pushing $(IMAGE_TAG_SHA)..."
-	docker push $(IMAGE_TAG_SHA)
-	@echo "Pushing $(IMAGE_TAG_DEV)..."
-	docker push $(IMAGE_TAG_DEV)
-	@echo "✓ Pushed to $(REGISTRY)/$(ORG)/$(IMAGE)"
-	@echo ""
-	@echo "📌 Next: capture the digest for DAGSTER_IMAGE:"
-	@echo "   export DAGSTER_IMAGE=$$(docker inspect --format='{{index .RepoDigests 0}}' $(IMAGE_TAG_SHA))"
+# Login AND push in the SAME shell — the Docker Desktop keychain helper can drop
+# a credential written by a prior shell ("context deadline exceeded"), which is
+# what made earlier pushes silently fail. Does NOT rebuild; run docker-build first
+# (or use docker-build-push).
+docker-push:
+	@bash -c '$(LOAD_ENV) \
+		: "$${GITLAB_USER:?set GITLAB_USER in nrp/.env}"; \
+		: "$${GITLAB_TOKEN:?set GITLAB_TOKEN in nrp/.env}"; \
+		if ! docker image inspect $(IMAGE_TAG_SHA) >/dev/null 2>&1; then \
+			echo "✗ $(IMAGE_TAG_SHA) not built yet — run: make docker-build"; exit 1; \
+		fi; \
+		echo "$$GITLAB_TOKEN" | docker login $(REGISTRY) -u "$$GITLAB_USER" --password-stdin; \
+		docker push $(IMAGE_TAG_SHA); \
+		docker push $(IMAGE_TAG_DEV); \
+		echo "✓ Pushed $(IMAGE_TAG_SHA) and :dev"; \
+		echo "  Pin the digest for Helm/.env:"; \
+		echo "  DAGSTER_IMAGE=$$(docker inspect --format='"'"'{{index .RepoDigests 0}}'"'"' $(IMAGE_TAG_SHA))"'
 
-docker-build-push: docker-push
+docker-build-push: docker-build docker-push
 
 docker-digest:
-	@echo "Digest for $(IMAGE_TAG_SHA):"
 	@docker inspect --format='{{index .RepoDigests 0}}' $(IMAGE_TAG_SHA)
 
 docker-clean:
-	@echo "Removing local images..."
-	docker rmi -f $(IMAGE_TAG_SHA) $(IMAGE_TAG_DEV) 2>/dev/null || true
-	@echo "✓ Cleaned"
+	@docker rmi -f $(IMAGE_TAG_SHA) $(IMAGE_TAG_DEV) 2>/dev/null || true
+	@echo "✓ Removed local tags"
 
 docker-tags:
-	@echo "Image tags (ready to build):"
-	@echo "  SHA: $(IMAGE_TAG_SHA)"
-	@echo "  DEV: $(IMAGE_TAG_DEV)"
+	@echo "$(IMAGE_TAG_SHA)"
+	@echo "$(IMAGE_TAG_DEV)"

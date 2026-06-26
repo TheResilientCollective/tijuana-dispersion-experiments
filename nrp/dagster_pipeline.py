@@ -285,13 +285,14 @@ def sobol_aggregate(
     group_name="sobol_sensitivity",
     op_tags=_AGGREGATOR_K8S_TAGS,
     io_manager_key="s3_io",
-    required_resource_keys={"s3"},
+    # required_resource_keys={"s3"},
     ins={"sobol_aggregate": dg.AssetIn("sobol_aggregate")},
 )
 def sobol_post_analysis(
     context: AssetExecutionContext,
     config: SobolConfig,
     sobol_aggregate: dict[str, Any],
+    s3: S3Resource,
 ) -> dg.MaterializeResult:
     """Post-analysis + archival snapshot for a Sobol run.
 
@@ -332,7 +333,7 @@ def sobol_post_analysis(
     bucket = os.getenv("DAGSTER_S3_BUCKET")
     archived: dict[str, str] = {}
     if bucket:
-        s3 = context.resources.s3.get_client()  # boto3 client
+        # s3 = context.resources.s3.get_client()  # boto3 client
         prefix = f"runs/{tag}"
         # 1) indices, full table
         buf_p = io.BytesIO()

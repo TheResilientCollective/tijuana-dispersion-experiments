@@ -36,8 +36,11 @@ Read the dagster-expert skill before extending. Especially: "partitioned
 assets," "io_manager," "resources," "sensors."
 """
 
+import json as _json
 import logging
 import os
+from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +52,7 @@ from dagster_aws.s3 import S3PickleIOManager, S3Resource
 from dagster_k8s import k8s_job_executor
 
 from nrp import mcmc
+from nrp.runstore import RunManifest, write_manifest
 
 from . import sobol
 from .resources import SlackWebhookResource
@@ -314,6 +318,7 @@ def sobol_post_analysis(
     import json as _json
 
     indices = pd.DataFrame(sobol_aggregate["indices"])
+    top = indices.sort_values("ST", ascending=False).head(1).iloc[0]
 
     diag = sobol.convergence_diagnostics(indices)
     glob = sobol.global_ranking(indices)
@@ -329,17 +334,19 @@ def sobol_post_analysis(
         config.seed,
     )
 
-    # ----- archival snapshot to s3://<bucket>/runs/{tag}/ -----
+    # ----- archival snapshot to s3://<bucket>/runs/sobol/{tag}/ -----
     bucket = os.getenv("DAGSTER_S3_BUCKET")
+    git_sha = os.getenv("DAGSTER_GIT_SHA", "unknown")
+    image_digest = os.getenv("DAGSTER_IMAGE_DIGEST", "unknown")
     archived: dict[str, str] = {}
     if bucket:
-        # s3 = context.resources.s3.get_client()  # boto3 client
-        prefix = f"runs/{tag}"
+        s3_client = s3.get_client()  # boto3 client
+        prefix = f"runs/sobol/{tag}"
         # 1) indices, full table
         buf_p = io.BytesIO()
         indices.to_parquet(buf_p, index=False)
-        s3.put_object(Bucket=bucket, Key=f"{prefix}/sobol_indices.parquet", Body=buf_p.getvalue())
-        archived["indices"] = f"s3://{bucket}/{prefix}/sobol_indices.parquet"
+        s3_client.put_object(Bucket=bucket, Key=f"{prefix}/sobol_indices.parquet", Body=buf_p.getvalue())
+        archived["indices"] = f"runs/sobol/{tag}/sobol_indices.parquet"
         # 2) diagnostics + summaries, machine-readable
         analysis = {
             "tag": tag,
@@ -354,12 +361,12 @@ def sobol_post_analysis(
             "interaction_table": inter.to_dict(orient="records"),
             "dropout_candidates_window_specific": drops,
         }
-        s3.put_object(
+        s3_client.put_object(
             Bucket=bucket,
             Key=f"{prefix}/analysis.json",
             Body=_json.dumps(analysis, indent=2).encode(),
         )
-        archived["analysis"] = f"s3://{bucket}/{prefix}/analysis.json"
+        archived["analysis"] = f"runs/sobol/{tag}/analysis.json"
         # 3) human-readable summary
         md = (
             f"# Sobol run `{tag}`\n\n"
@@ -381,12 +388,27 @@ def sobol_post_analysis(
             f"(NOT global — need multi-window confirmation)\n\n"
             f"{drops or '(none)'}\n"
         )
-        s3.put_object(Bucket=bucket, Key=f"{prefix}/summary.md", Body=md.encode())
-        archived["summary"] = f"s3://{bucket}/{prefix}/summary.md"
+        s3_client.put_object(Bucket=bucket, Key=f"{prefix}/summary.md", Body=md.encode())
+        archived["summary"] = f"runs/sobol/{tag}/summary.md"
+        # 4) manifest (self-describing metadata + artifact pointers)
+        manifest = RunManifest(
+            kind="sobol",
+            tag=tag,
+            window=[config.window_start, config.window_end],
+            n_base_samples=config.n_base_samples,
+            seed=config.seed,
+            git_sha=git_sha,
+            image_digest=image_digest,
+            status="complete",
+            created=_json.dumps(datetime.now(timezone.utc), default=str),
+            headline={"top_param": top["parameter"], "top_ST": float(top["ST"])},
+            artifacts=archived,
+        )
+        write_manifest(s3_client, bucket, manifest)
     else:
         # No S3 — local dev / smoke. Skip archival; analysis is still
         # in MaterializeResult metadata + the asset's IO-manager value.
-        log.info("DAGSTER_S3_BUCKET unset; skipping archival write to runs/%s/", tag)
+        log.info("DAGSTER_S3_BUCKET unset; skipping archival write to runs/sobol/%s/", tag)
 
     # ----- MaterializeResult: surface headline in Dagster UI -----
     return dg.MaterializeResult(
@@ -409,6 +431,73 @@ def sobol_post_analysis(
             "archived_snapshot": dg.MetadataValue.md(
                 "\n".join(f"- `{k}`: `{v}`" for k, v in archived.items()) or "(no S3 archive)",
             ),
+        },
+    )
+
+
+# ============================================================
+# Ledger and site generation
+# ============================================================
+
+
+@dg.asset(
+    group_name="reporting",
+    op_tags=_AGGREGATOR_K8S_TAGS,
+    io_manager_key="s3_io",
+    required_resource_keys={"s3"},
+)
+def build_index(
+    context: AssetExecutionContext,
+) -> dg.MaterializeResult:
+    """Build the run ledger (runs.jsonl) and browsable site (index.html).
+
+    Scans all run manifests in S3, aggregates into a sortable ledger, and
+    generates a static HTML site. Runs on-demand or after major calibration
+    runs complete. Safe to run repeatedly — reads from S3, overwrites site/.
+    """
+    from nrp.runstore import build_ledger, build_site
+
+    bucket = os.getenv("DAGSTER_S3_BUCKET")
+    if not bucket:
+        log.warning("DAGSTER_S3_BUCKET unset; skipping index build")
+        return dg.MaterializeResult(
+            value={},
+            metadata={"status": "skipped (no S3 bucket)"},
+        )
+
+    s3_client = context.resources.s3.get_client()
+
+    # Aggregate all manifests
+    ledger = build_ledger(s3_client, bucket)
+    log.info("Indexed %d runs from S3", len(ledger))
+
+    # Generate site
+    html = build_site(ledger)
+    s3_client.put_object(
+        Bucket=bucket,
+        Key="site/index.html",
+        Body=html.encode(),
+        ContentType="text/html",
+    )
+
+    # Write ledger as JSONL (one manifest per line)
+    ledger_lines = [
+        _json.dumps(asdict(m), default=str)
+        for m in sorted(ledger.values(), key=lambda m: m.created or "", reverse=True)
+    ]
+    s3_client.put_object(
+        Bucket=bucket,
+        Key="ledger/runs.jsonl",
+        Body="\n".join(ledger_lines).encode(),
+        ContentType="application/x-ndjson",
+    )
+
+    return dg.MaterializeResult(
+        value={"ledger_size": len(ledger), "site_url": f"s3://{bucket}/site/index.html"},
+        metadata={
+            "runs_indexed": len(ledger),
+            "site_url": f"s3://{bucket}/site/index.html",
+            "ledger_url": f"s3://{bucket}/ledger/runs.jsonl",
         },
     )
 

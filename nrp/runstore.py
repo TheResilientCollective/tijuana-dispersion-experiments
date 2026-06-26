@@ -166,10 +166,7 @@ def build_site(ledger: dict[str, RunManifest]) -> str:
     rows = []
     for m in sorted_runs:
         skill_val = m.skill.get("validation") or m.skill.get("test") or "—"
-        if isinstance(skill_val, (int, float)):
-            skill_str = f"{skill_val:.3f}"
-        else:
-            skill_str = str(skill_val)
+        skill_str = f"{skill_val:.3f}" if isinstance(skill_val, int | float) else str(skill_val)
 
         rows.append(
             f"<tr>"

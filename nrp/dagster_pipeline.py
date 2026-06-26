@@ -40,7 +40,7 @@ import json as _json
 import logging
 import os
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -345,7 +345,9 @@ def sobol_post_analysis(
         # 1) indices, full table
         buf_p = io.BytesIO()
         indices.to_parquet(buf_p, index=False)
-        s3_client.put_object(Bucket=bucket, Key=f"{prefix}/sobol_indices.parquet", Body=buf_p.getvalue())
+        s3_client.put_object(
+            Bucket=bucket, Key=f"{prefix}/sobol_indices.parquet", Body=buf_p.getvalue()
+        )
         archived["indices"] = f"runs/sobol/{tag}/sobol_indices.parquet"
         # 2) diagnostics + summaries, machine-readable
         analysis = {
@@ -400,7 +402,7 @@ def sobol_post_analysis(
             git_sha=git_sha,
             image_digest=image_digest,
             status="complete",
-            created=_json.dumps(datetime.now(timezone.utc), default=str),
+            created=_json.dumps(datetime.now(UTC), default=str),
             headline={"top_param": top["parameter"], "top_ST": float(top["ST"])},
             artifacts=archived,
         )
@@ -506,6 +508,21 @@ def build_index(
 # MCMC workload
 # ============================================================
 
+# The 9 calibration metrics (3 fit types × 3 receptors) that observations and
+# forward-model output are keyed by. Used to shape placeholder scaffolding until
+# load_obs_for_window / the real forward model are wired in (see TODOs below).
+_CALIBRATION_METRICS = [
+    "rms__SAN YSIDRO",
+    "rms__NESTOR - BES",
+    "rms__IB CIVIC CTR",
+    "peak_ratio__SAN YSIDRO",
+    "peak_ratio__NESTOR - BES",
+    "peak_ratio__IB CIVIC CTR",
+    "corr__SAN YSIDRO",
+    "corr__NESTOR - BES",
+    "corr__IB CIVIC CTR",
+]
+
 
 @dg.asset(
     group_name="mcmc_posterior",
@@ -544,21 +561,11 @@ def mcmc_chain_results(
     # TODO: Load observation data for the window
     # For now, placeholder: forward_model_fn needs to be wired to the actual model
     # obs = load_obs_for_window(config.window_start, config.window_end)
-    obs = {
-        "rms__SAN YSIDRO": np.random.randn(100),
-        "rms__NESTOR - BES": np.random.randn(100),
-        "rms__IB CIVIC CTR": np.random.randn(100),
-        "peak_ratio__SAN YSIDRO": np.random.randn(100),
-        "peak_ratio__NESTOR - BES": np.random.randn(100),
-        "peak_ratio__IB CIVIC CTR": np.random.randn(100),
-        "corr__SAN YSIDRO": np.random.randn(100),
-        "corr__NESTOR - BES": np.random.randn(100),
-        "corr__IB CIVIC CTR": np.random.randn(100),
-    }
+    obs = {k: np.random.randn(100) for k in _CALIBRATION_METRICS}  # random ok: placeholder
 
     # TODO: Wire forward_model_fn to the actual dispersion model
     def forward_model_fn(params):
-        return {k: np.random.randn(100) for k in obs}
+        return {k: np.random.randn(100) for k in obs}  # random ok: placeholder
 
     model = mcmc.build_model(obs, forward_model_fn, priors, obs_sigma=config.obs_sigma)
     idata = mcmc.sample_posterior(
@@ -661,21 +668,11 @@ def cv_fold_results(
     context.log.info(f"Hold-out CV fold: {held_out_event}")
 
     # TODO: Load observations for held-out event
-    obs_holdout = {
-        "rms__SAN YSIDRO": np.random.randn(100),
-        "rms__NESTOR - BES": np.random.randn(100),
-        "rms__IB CIVIC CTR": np.random.randn(100),
-        "peak_ratio__SAN YSIDRO": np.random.randn(100),
-        "peak_ratio__NESTOR - BES": np.random.randn(100),
-        "peak_ratio__IB CIVIC CTR": np.random.randn(100),
-        "corr__SAN YSIDRO": np.random.randn(100),
-        "corr__NESTOR - BES": np.random.randn(100),
-        "corr__IB CIVIC CTR": np.random.randn(100),
-    }
+    obs_holdout = {k: np.random.randn(100) for k in _CALIBRATION_METRICS}  # random ok: placeholder
 
     # TODO: Wire forward_model_fn to actual dispersion model
     def forward_model_fn(params):
-        return {k: np.random.randn(100) for k in obs_holdout}
+        return {k: np.random.randn(100) for k in obs_holdout}  # random ok: placeholder
 
     # TODO: Restore InferenceData from mcmc_chain_results
     # idata = az.from_dict(mcmc_chain_results.get("idata", {}))

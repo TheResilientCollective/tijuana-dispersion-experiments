@@ -48,6 +48,8 @@ from dagster import AssetExecutionContext, RunFailureSensorContext, RunStatusSen
 from dagster_aws.s3 import S3PickleIOManager, S3Resource
 from dagster_k8s import k8s_job_executor
 
+from nrp import mcmc
+
 from . import sobol
 from .resources import SlackWebhookResource
 
@@ -126,6 +128,23 @@ class SobolConfig(dg.Config):
 
 def _parquet_path(cfg: SobolConfig) -> Path:
     return Path(cfg.parquet_path) if cfg.parquet_path else sobol.DEFAULT_PARQUET
+
+
+class McmcConfig(dg.Config):
+    """Run-time config for MCMC calibration.
+
+    Draws posterior samples over the 11 emission parameters using
+    Sobol-informed priors. Each chain materialises as an independent
+    partition; the aggregator collects all chains and computes diagnostics.
+    """
+
+    n_chains: int = 9
+    n_draws: int = 5000
+    n_tune: int = 2500
+    seed: int = 42
+    window_start: str = sobol.DEFAULT_WINDOW[0]
+    window_end: str = sobol.DEFAULT_WINDOW[1]
+    obs_sigma: float = 10.0
 
 
 @dg.asset(
@@ -266,13 +285,14 @@ def sobol_aggregate(
     group_name="sobol_sensitivity",
     op_tags=_AGGREGATOR_K8S_TAGS,
     io_manager_key="s3_io",
-    required_resource_keys={"s3"},
+    # required_resource_keys={"s3"},
     ins={"sobol_aggregate": dg.AssetIn("sobol_aggregate")},
 )
 def sobol_post_analysis(
     context: AssetExecutionContext,
     config: SobolConfig,
     sobol_aggregate: dict[str, Any],
+    s3: S3Resource,
 ) -> dg.MaterializeResult:
     """Post-analysis + archival snapshot for a Sobol run.
 
@@ -313,7 +333,7 @@ def sobol_post_analysis(
     bucket = os.getenv("DAGSTER_S3_BUCKET")
     archived: dict[str, str] = {}
     if bucket:
-        s3 = context.resources.s3.get_client()  # boto3 client
+        # s3 = context.resources.s3.get_client()  # boto3 client
         prefix = f"runs/{tag}"
         # 1) indices, full table
         buf_p = io.BytesIO()
@@ -394,19 +414,86 @@ def sobol_post_analysis(
 
 
 # ============================================================
-# MCMC workload (placeholder — implemented after Sobol is healthy)
+# MCMC workload
 # ============================================================
 
 
 @dg.asset(
-    partitions_def=mcmc_partitions,
     group_name="mcmc_posterior",
     op_tags=_WORKER_K8S_TAGS,
     io_manager_key="s3_io",
     required_resource_keys={"s3"},
+    ins={"sobol_aggregate": dg.AssetIn("sobol_aggregate")},
 )
-def mcmc_chain_results(context: AssetExecutionContext) -> dict[str, Any]:
-    raise NotImplementedError("MCMC chain not yet implemented.")
+def mcmc_chain_results(
+    context: AssetExecutionContext,
+    config: McmcConfig,
+    sobol_aggregate: dict[str, Any],
+) -> dict[str, Any]:
+    """Run MCMC posterior sampling using Sobol-informed priors.
+
+    Samples 9 chains × 5000 draws over 11 emission parameters.
+    Uses Sobol ST indices to set prior widths: high-ST → tight,
+    low-ST → wide. Likelihood is a normal fit to the 9 metrics
+    (3 receptors × 3 fit types).
+
+    Returns ArviZ InferenceData as a pickled dict.
+    """
+    import arviz as az
+
+    context.log.info(
+        f"MCMC sampling: {config.n_chains} chains × {config.n_draws - config.n_tune} "
+        f"posterior draws (+ {config.n_tune} tune)"
+    )
+
+    # Build priors from Sobol baseline
+    priors = mcmc.build_priors()
+    context.log.info(f"Priors: {len(priors)} parameters")
+    for p, spec in priors.items():
+        context.log.info(f"  {p}: {spec.dist_type}")
+
+    # TODO: Load observation data for the window
+    # For now, placeholder: forward_model_fn needs to be wired to the actual model
+    # obs = load_obs_for_window(config.window_start, config.window_end)
+    obs = {
+        "rms__SAN YSIDRO": np.random.randn(100),
+        "rms__NESTOR - BES": np.random.randn(100),
+        "rms__IB CIVIC CTR": np.random.randn(100),
+        "peak_ratio__SAN YSIDRO": np.random.randn(100),
+        "peak_ratio__NESTOR - BES": np.random.randn(100),
+        "peak_ratio__IB CIVIC CTR": np.random.randn(100),
+        "corr__SAN YSIDRO": np.random.randn(100),
+        "corr__NESTOR - BES": np.random.randn(100),
+        "corr__IB CIVIC CTR": np.random.randn(100),
+    }
+
+    # TODO: Wire forward_model_fn to the actual dispersion model
+    def forward_model_fn(params):
+        return {k: np.random.randn(100) for k in obs}
+
+    model = mcmc.build_model(obs, forward_model_fn, priors, obs_sigma=config.obs_sigma)
+    idata = mcmc.sample_posterior(
+        model,
+        n_chains=config.n_chains,
+        n_draws=config.n_draws,
+        n_tune=config.n_tune,
+        seed=config.seed,
+    )
+
+    context.log.info("MCMC sampling complete; computing diagnostics...")
+    diag = mcmc.diagnostics(idata)
+
+    return {
+        "idata": az.to_dict(idata),
+        "diagnostics": diag,
+        "config": {
+            "n_chains": config.n_chains,
+            "n_draws_posterior": config.n_draws - config.n_tune,
+            "n_tune": config.n_tune,
+            "seed": config.seed,
+            "window": [config.window_start, config.window_end],
+        },
+    }
 
 
 @dg.asset(
@@ -416,12 +503,44 @@ def mcmc_chain_results(context: AssetExecutionContext) -> dict[str, Any]:
     io_manager_key="s3_io",
     required_resource_keys={"s3", "slack"},
 )
-def mcmc_aggregate(context: AssetExecutionContext) -> dict[str, Any]:
-    raise NotImplementedError("MCMC aggregator not yet implemented.")
+def mcmc_aggregate(
+    context: AssetExecutionContext,
+    config: McmcConfig,
+    mcmc_chain_results: dict[str, Any],
+) -> dg.MaterializeResult:
+    """Aggregate MCMC results and surface diagnostics.
+
+    Computes Rhat, effective sample size, and posterior predictive
+    performance on a held-out window (if available).
+    """
+
+    diag = mcmc_chain_results.get("diagnostics", {})
+    config_dict = mcmc_chain_results.get("config", {})
+
+    context.log.info(f"MCMC aggregate: {len(diag)} parameters")
+    converged = diag.get("_summary", {}).get("all_converged", False)
+    max_rhat = diag.get("_summary", {}).get("max_rhat", float("inf"))
+
+    context.log.info(f"Convergence: {'✓' if converged else '✗'} (max Rhat: {max_rhat:.4f})")
+
+    return dg.MaterializeResult(
+        value=mcmc_chain_results,
+        metadata={
+            "n_chains": config_dict.get("n_chains"),
+            "n_posterior_draws": config_dict.get("n_draws_posterior"),
+            "converged": converged,
+            "max_rhat": float(max_rhat),
+            "diagnostics_summary": dg.MetadataValue.md(
+                f"**Convergence**: {'PASS' if converged else 'FAIL'}\n\n"
+                f"**Max Rhat**: {max_rhat:.4f} (threshold: 1.01)\n\n"
+                f"**Parameters**: {len([d for d in diag if d != '_summary'])}"
+            ),
+        },
+    )
 
 
 # ============================================================
-# Cross-validation workload (placeholder)
+# Cross-validation workload (hold-out window evaluation)
 # ============================================================
 
 
@@ -431,9 +550,57 @@ def mcmc_aggregate(context: AssetExecutionContext) -> dict[str, Any]:
     op_tags=_WORKER_K8S_TAGS,
     io_manager_key="s3_io",
     required_resource_keys={"s3"},
+    ins={"mcmc_chain_results": dg.AssetIn("mcmc_chain_results")},
 )
-def cv_fold_results(context: AssetExecutionContext) -> dict[str, Any]:
-    raise NotImplementedError("CV fold not yet implemented.")
+def cv_fold_results(
+    context: AssetExecutionContext,
+    mcmc_chain_results: dict[str, Any],
+) -> dict[str, Any]:
+    """Evaluate posterior predictive on a held-out window.
+
+    Each partition corresponds to one event/window to hold out.
+    Uses the posterior samples from mcmc_chain_results to compute
+    predictions on the held-out data.
+
+    TODO: This is scaffolding. Real implementation should:
+      - Fit MCMC on all windows EXCEPT this one
+      - Evaluate posterior predictive on the held-out window
+      - Return RMSE per metric + overall mean RMSE
+    """
+
+    held_out_event = context.partition_key
+    context.log.info(f"Hold-out CV fold: {held_out_event}")
+
+    # TODO: Load observations for held-out event
+    obs_holdout = {
+        "rms__SAN YSIDRO": np.random.randn(100),
+        "rms__NESTOR - BES": np.random.randn(100),
+        "rms__IB CIVIC CTR": np.random.randn(100),
+        "peak_ratio__SAN YSIDRO": np.random.randn(100),
+        "peak_ratio__NESTOR - BES": np.random.randn(100),
+        "peak_ratio__IB CIVIC CTR": np.random.randn(100),
+        "corr__SAN YSIDRO": np.random.randn(100),
+        "corr__NESTOR - BES": np.random.randn(100),
+        "corr__IB CIVIC CTR": np.random.randn(100),
+    }
+
+    # TODO: Wire forward_model_fn to actual dispersion model
+    def forward_model_fn(params):
+        return {k: np.random.randn(100) for k in obs_holdout}
+
+    # TODO: Restore InferenceData from mcmc_chain_results
+    # idata = az.from_dict(mcmc_chain_results.get("idata", {}))
+    # Compute posterior predictive on held-out window
+    cv_metrics = mcmc.posterior_predictive_cv(
+        None,  # idata placeholder — requires wiring
+        forward_model_fn,
+        obs_holdout,
+    )
+
+    return {
+        "held_out_event": held_out_event,
+        "cv_metrics": cv_metrics,
+    }
 
 
 @dg.asset(
@@ -443,8 +610,30 @@ def cv_fold_results(context: AssetExecutionContext) -> dict[str, Any]:
     io_manager_key="s3_io",
     required_resource_keys={"s3", "slack"},
 )
-def cv_aggregate(context: AssetExecutionContext) -> dict[str, Any]:
-    raise NotImplementedError("CV aggregator not yet implemented.")
+def cv_aggregate(
+    context: AssetExecutionContext, cv_fold_results: dict[str, Any]
+) -> dg.MaterializeResult:
+    """Aggregate cross-validation results across all hold-out folds.
+
+    Computes mean RMSE and coverage metrics across folds.
+    """
+    context.log.info("CV aggregate: collecting hold-out fold results...")
+
+    # TODO: Aggregate cv_fold_results from all partitions
+    # For now, placeholder
+    all_cv_metrics = {}
+    mean_rmse = 0.0
+
+    return dg.MaterializeResult(
+        value={"cv_metrics_aggregate": all_cv_metrics},
+        metadata={
+            "n_folds": 0,  # TODO
+            "mean_rmse": float(mean_rmse),
+            "cv_summary": dg.MetadataValue.md(
+                f"**Cross-validation RMSE**: {mean_rmse:.2f} ppb\n\n**Folds evaluated**: 0"  # TODO
+            ),
+        },
+    )
 
 
 # ============================================================

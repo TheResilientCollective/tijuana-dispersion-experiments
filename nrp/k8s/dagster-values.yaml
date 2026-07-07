@@ -109,6 +109,16 @@ dagster-user-deployments:
         - "-m"
         - "nrp.definitions"
       port: 3030
+      # The gRPC health-check CLI (`dagster api grpc-health-check`) is
+      # CPU-bound at container startup; under the 500m CPU limit it
+      # regularly exceeds the chart's default 10s probe timeout, so the
+      # pod never becomes Ready and the webserver can't reach the code
+      # location (DagsterUserCodeUnreachableError / gRPC UNAVAILABLE).
+      # Give the probe room. See DEPLOYMENT.md §7.
+      readinessProbe:
+        timeoutSeconds: 60
+        periodSeconds: 30
+        failureThreshold: 8
       includeConfigInLaunchedRuns:
         enabled: true
       envSecrets:

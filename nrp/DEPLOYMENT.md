@@ -350,6 +350,18 @@ status and archive tag — copy the tags into `fetch_sobol_results.py
 - **Backfill submission**: The `dg launch` CLI cannot submit
   multi-partition backfills. Use the GraphQL API via
   `nrp/scripts/_submit_backfill.py`.
+- **Code-location readiness probe** (seen 2026-07-07): the chart's
+  default readiness probe runs `dagster api grpc-health-check -p 3030`
+  with a 10s timeout. Under the 500m CPU limit the CLI startup exceeds
+  10s, so the `dagster-user-deployments-nrp` pod never becomes `Ready`,
+  is dropped from the Service, and the webserver reports
+  `DagsterUserCodeUnreachableError` / gRPC `UNAVAILABLE` — no
+  submission possible. Fix: a `readinessProbe` override
+  (`timeoutSeconds: 60`, `periodSeconds: 30`, `failureThreshold: 8`)
+  on the `nrp` deployment in `dagster-values.yaml`. Symptom check:
+  `kubectl get pods -n ucsd-center4health -l deployment=nrp` shows
+  `0/1 Running`, and `kubectl describe` shows repeated
+  `Readiness probe failed: ... grpc-health-check ... timed out`.
 
 ## 8. Teardown
 

@@ -40,6 +40,24 @@ dagsterDaemon:
     limits:
       cpu: 500m
       memory: 512Mi
+  # Bound backfill fan-out. The chart default is unlimited
+  # (maxConcurrentRuns: -1), which launches all 100 Sobol chunk runs at
+  # once. That storm caused the two infra failures seen on 2026-07-07:
+  #   1. Postgres connection exhaustion — each run pod AND its step pod
+  #      open a connection; ~200 at once blew past PG's default
+  #      max_connections (100) → "too many retries for DB connection".
+  #   2. Image-pull thundering-herd against the GitLab registry →
+  #      transient ErrImagePull that exceeded step-job deadlines.
+  # Capping at 25 keeps peak connections (~25 run + ~25 step + overhead)
+  # comfortably under 100 and pulls the image in waves. 100 chunks then
+  # run ~4 waves; wall-clock is barely affected because waves overlap
+  # (a new run dequeues the moment one finishes).
+  runCoordinator:
+    enabled: true
+    type: QueuedRunCoordinator
+    config:
+      queuedRunCoordinator:
+        maxConcurrentRuns: 25
 
 dagsterWebserver:
   replicaCount: 1
@@ -140,6 +158,7 @@ dagster-user-deployments:
       # location (DagsterUserCodeUnreachableError / gRPC UNAVAILABLE).
       # Give the probe room. See DEPLOYMENT.md §7.
       readinessProbe:
+        enabled: true
         timeoutSeconds: 60
         periodSeconds: 30
         failureThreshold: 8

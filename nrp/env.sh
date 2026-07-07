@@ -16,8 +16,7 @@ export GH_TOKEN="${GH_TOKEN:-$(gh auth token 2>/dev/null)}"
 # Create at: https://gitlab.nrp-nautilus.io/-/user_settings/personal_access_tokens
 # Required scopes: read_registry, write_registry
 # ---------------------------------------------------------------------------
-export GITLAB_USER="${GITLAB_USER:-}"                         # FILL IN — your NRP GitLab username
-export GITLAB_TOKEN="${GITLAB_TOKEN:-}"                       # FILL IN — glpat-…
+"                       # FILL IN — glpat-…
 
 if [[ -n "${GITLAB_TOKEN}" && -n "${GITLAB_USER}" ]]; then
     echo "${GITLAB_TOKEN}" | docker login gitlab-registry.nrp-nautilus.io \

@@ -27,6 +27,8 @@ dependencies = [
 
     # global sensitivity (used by the LHS / Sobol scripts)
     "SALib>=1.5,<2.0",
+    "arviz>=0.16,<1.0",
+    "pymc>=5.3,<6.0",
 ]
 
 [project.optional-dependencies]
@@ -117,3 +119,8 @@ directory_type = "project"
 
 # (string, required) Specifies the root module of the project.
 root_module = "nrp" # this is required
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.6.0",
+]

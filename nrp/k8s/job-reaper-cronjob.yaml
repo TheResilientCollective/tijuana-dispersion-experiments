@@ -1,0 +1,82 @@
+# Reaper CronJob — prunes completed Dagster K8s Jobs so they don't pile up.
+#
+# WHY: each Dagster backfill spawns hundreds of run + step Jobs. Dagster sets
+# ttlSecondsAfterFinished=86400 (24h) on every Job, but at our volume that
+# still leaves many hundreds of finished Jobs sitting in the namespace for a
+# full day (we observed 870 accumulate in ~19h). This reaps SUCCEEDED Dagster
+# Jobs every 15 min — their run/step events are already persisted in Postgres
+# and their compute logs in S3, so the Job object is disposable once done.
+#
+# FAILED Jobs are deliberately NOT touched, so you can still inspect them; the
+# built-in 24h TTL eventually clears those. To also reap failures promptly,
+# change the selector below to include .status.failed==1.
+#
+# SAFETY: selects ONLY Jobs labelled app.kubernetes.io/instance=dagster, so it
+# can never delete other workloads (or its own Jobs, which lack that label).
+# Reuses the dagster-nrp ServiceAccount, which already has jobs: [list, delete]
+# (nrp/k8s/rbac.yaml). Deleting a Job cascades to its pods via the garbage
+# collector, so no pod-delete permission is required.
+#
+# Apply:
+#   kubectl apply -f nrp/k8s/job-reaper-cronjob.yaml -n ucsd-center4health
+# Watch:
+#   kubectl get cronjob dagster-job-reaper -n ucsd-center4health
+#   kubectl logs -n ucsd-center4health -l app.kubernetes.io/part-of=dagster-nrp --tail=20
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dagster-job-reaper
+  namespace: ucsd-center4health
+  labels:
+    app.kubernetes.io/part-of: dagster-nrp
+spec:
+  schedule: "*/15 * * * *"          # every 15 minutes
+  concurrencyPolicy: Forbid         # never overlap reaper runs
+  successfulJobsHistoryLimit: 1     # keep the namespace tidy of reaper Jobs too
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 120  # reaper's own Job self-cleans quickly
+      backoffLimit: 1
+      activeDeadlineSeconds: 300
+      template:
+        metadata:
+          labels:
+            # NOTE: intentionally NOT app.kubernetes.io/instance=dagster — that
+            # is the selector the reaper deletes by, so this keeps it from ever
+            # matching (and deleting) itself.
+            app.kubernetes.io/part-of: dagster-nrp
+        spec:
+          serviceAccountName: dagster-nrp
+          restartPolicy: Never
+          containers:
+            - name: reaper
+              # Any image with kubectl + /bin/sh works. Pinned to the cluster
+              # minor (v1.33). Swap for rancher/kubectl:v1.33.1 if this tag is
+              # unavailable in your registry mirror.
+              image: bitnami/kubectl:1.33
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  NS=ucsd-center4health
+                  echo "[reaper] scanning succeeded Dagster jobs in $NS"
+                  names=$(kubectl get jobs -n "$NS" \
+                    -l app.kubernetes.io/instance=dagster \
+                    -o jsonpath='{range .items[?(@.status.succeeded==1)]}{.metadata.name}{"\n"}{end}')
+                  if [ -z "$names" ]; then
+                    echo "[reaper] nothing to reap"
+                    exit 0
+                  fi
+                  count=$(echo "$names" | grep -c .)
+                  echo "[reaper] deleting $count succeeded job(s)"
+                  echo "$names" | xargs -r -n 50 kubectl delete job -n "$NS" --ignore-not-found
+                  echo "[reaper] done"

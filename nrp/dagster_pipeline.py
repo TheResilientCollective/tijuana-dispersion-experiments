@@ -36,8 +36,11 @@ Read the dagster-expert skill before extending. Especially: "partitioned
 assets," "io_manager," "resources," "sensors."
 """
 
+import json as _json
 import logging
 import os
+from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +50,9 @@ import pandas as pd
 from dagster import AssetExecutionContext, RunFailureSensorContext, RunStatusSensorContext
 from dagster_aws.s3 import S3PickleIOManager, S3Resource
 from dagster_k8s import k8s_job_executor
+
+from nrp import mcmc
+from nrp.runstore import RunManifest, write_manifest
 
 from . import sobol
 from .resources import SlackWebhookResource
@@ -126,6 +132,23 @@ class SobolConfig(dg.Config):
 
 def _parquet_path(cfg: SobolConfig) -> Path:
     return Path(cfg.parquet_path) if cfg.parquet_path else sobol.DEFAULT_PARQUET
+
+
+class McmcConfig(dg.Config):
+    """Run-time config for MCMC calibration.
+
+    Draws posterior samples over the 11 emission parameters using
+    Sobol-informed priors. Each chain materialises as an independent
+    partition; the aggregator collects all chains and computes diagnostics.
+    """
+
+    n_chains: int = 9
+    n_draws: int = 5000
+    n_tune: int = 2500
+    seed: int = 42
+    window_start: str = sobol.DEFAULT_WINDOW[0]
+    window_end: str = sobol.DEFAULT_WINDOW[1]
+    obs_sigma: float = 10.0
 
 
 @dg.asset(
@@ -266,13 +289,14 @@ def sobol_aggregate(
     group_name="sobol_sensitivity",
     op_tags=_AGGREGATOR_K8S_TAGS,
     io_manager_key="s3_io",
-    required_resource_keys={"s3"},
+    # required_resource_keys={"s3"},
     ins={"sobol_aggregate": dg.AssetIn("sobol_aggregate")},
 )
 def sobol_post_analysis(
     context: AssetExecutionContext,
     config: SobolConfig,
     sobol_aggregate: dict[str, Any],
+    s3: S3Resource,
 ) -> dg.MaterializeResult:
     """Post-analysis + archival snapshot for a Sobol run.
 
@@ -294,6 +318,7 @@ def sobol_post_analysis(
     import json as _json
 
     indices = pd.DataFrame(sobol_aggregate["indices"])
+    top = indices.sort_values("ST", ascending=False).head(1).iloc[0]
 
     diag = sobol.convergence_diagnostics(indices)
     glob = sobol.global_ranking(indices)
@@ -309,17 +334,21 @@ def sobol_post_analysis(
         config.seed,
     )
 
-    # ----- archival snapshot to s3://<bucket>/runs/{tag}/ -----
+    # ----- archival snapshot to s3://<bucket>/runs/sobol/{tag}/ -----
     bucket = os.getenv("DAGSTER_S3_BUCKET")
+    git_sha = os.getenv("DAGSTER_GIT_SHA", "unknown")
+    image_digest = os.getenv("DAGSTER_IMAGE_DIGEST", "unknown")
     archived: dict[str, str] = {}
     if bucket:
-        s3 = context.resources.s3.get_client()  # boto3 client
-        prefix = f"runs/{tag}"
+        s3_client = s3.get_client()  # boto3 client
+        prefix = f"runs/sobol/{tag}"
         # 1) indices, full table
         buf_p = io.BytesIO()
         indices.to_parquet(buf_p, index=False)
-        s3.put_object(Bucket=bucket, Key=f"{prefix}/sobol_indices.parquet", Body=buf_p.getvalue())
-        archived["indices"] = f"s3://{bucket}/{prefix}/sobol_indices.parquet"
+        s3_client.put_object(
+            Bucket=bucket, Key=f"{prefix}/sobol_indices.parquet", Body=buf_p.getvalue()
+        )
+        archived["indices"] = f"runs/sobol/{tag}/sobol_indices.parquet"
         # 2) diagnostics + summaries, machine-readable
         analysis = {
             "tag": tag,
@@ -334,12 +363,12 @@ def sobol_post_analysis(
             "interaction_table": inter.to_dict(orient="records"),
             "dropout_candidates_window_specific": drops,
         }
-        s3.put_object(
+        s3_client.put_object(
             Bucket=bucket,
             Key=f"{prefix}/analysis.json",
             Body=_json.dumps(analysis, indent=2).encode(),
         )
-        archived["analysis"] = f"s3://{bucket}/{prefix}/analysis.json"
+        archived["analysis"] = f"runs/sobol/{tag}/analysis.json"
         # 3) human-readable summary
         md = (
             f"# Sobol run `{tag}`\n\n"
@@ -361,12 +390,27 @@ def sobol_post_analysis(
             f"(NOT global — need multi-window confirmation)\n\n"
             f"{drops or '(none)'}\n"
         )
-        s3.put_object(Bucket=bucket, Key=f"{prefix}/summary.md", Body=md.encode())
-        archived["summary"] = f"s3://{bucket}/{prefix}/summary.md"
+        s3_client.put_object(Bucket=bucket, Key=f"{prefix}/summary.md", Body=md.encode())
+        archived["summary"] = f"runs/sobol/{tag}/summary.md"
+        # 4) manifest (self-describing metadata + artifact pointers)
+        manifest = RunManifest(
+            kind="sobol",
+            tag=tag,
+            window=[config.window_start, config.window_end],
+            n_base_samples=config.n_base_samples,
+            seed=config.seed,
+            git_sha=git_sha,
+            image_digest=image_digest,
+            status="complete",
+            created=_json.dumps(datetime.now(UTC), default=str),
+            headline={"top_param": top["parameter"], "top_ST": float(top["ST"])},
+            artifacts=archived,
+        )
+        write_manifest(s3_client, bucket, manifest)
     else:
         # No S3 — local dev / smoke. Skip archival; analysis is still
         # in MaterializeResult metadata + the asset's IO-manager value.
-        log.info("DAGSTER_S3_BUCKET unset; skipping archival write to runs/%s/", tag)
+        log.info("DAGSTER_S3_BUCKET unset; skipping archival write to runs/sobol/%s/", tag)
 
     # ----- MaterializeResult: surface headline in Dagster UI -----
     return dg.MaterializeResult(
@@ -394,19 +438,158 @@ def sobol_post_analysis(
 
 
 # ============================================================
-# MCMC workload (placeholder — implemented after Sobol is healthy)
+# Ledger and site generation
 # ============================================================
 
 
 @dg.asset(
-    partitions_def=mcmc_partitions,
+    group_name="reporting",
+    op_tags=_AGGREGATOR_K8S_TAGS,
+    io_manager_key="s3_io",
+    required_resource_keys={"s3"},
+)
+def build_index(
+    context: AssetExecutionContext,
+) -> dg.MaterializeResult:
+    """Build the run ledger (runs.jsonl) and browsable site (index.html).
+
+    Scans all run manifests in S3, aggregates into a sortable ledger, and
+    generates a static HTML site. Runs on-demand or after major calibration
+    runs complete. Safe to run repeatedly — reads from S3, overwrites site/.
+    """
+    from nrp.runstore import build_ledger, build_site
+
+    bucket = os.getenv("DAGSTER_S3_BUCKET")
+    if not bucket:
+        log.warning("DAGSTER_S3_BUCKET unset; skipping index build")
+        return dg.MaterializeResult(
+            value={},
+            metadata={"status": "skipped (no S3 bucket)"},
+        )
+
+    s3_client = context.resources.s3.get_client()
+
+    # Aggregate all manifests
+    ledger = build_ledger(s3_client, bucket)
+    log.info("Indexed %d runs from S3", len(ledger))
+
+    # Generate site
+    html = build_site(ledger)
+    s3_client.put_object(
+        Bucket=bucket,
+        Key="site/index.html",
+        Body=html.encode(),
+        ContentType="text/html",
+    )
+
+    # Write ledger as JSONL (one manifest per line)
+    ledger_lines = [
+        _json.dumps(asdict(m), default=str)
+        for m in sorted(ledger.values(), key=lambda m: m.created or "", reverse=True)
+    ]
+    s3_client.put_object(
+        Bucket=bucket,
+        Key="ledger/runs.jsonl",
+        Body="\n".join(ledger_lines).encode(),
+        ContentType="application/x-ndjson",
+    )
+
+    return dg.MaterializeResult(
+        value={"ledger_size": len(ledger), "site_url": f"s3://{bucket}/site/index.html"},
+        metadata={
+            "runs_indexed": len(ledger),
+            "site_url": f"s3://{bucket}/site/index.html",
+            "ledger_url": f"s3://{bucket}/ledger/runs.jsonl",
+        },
+    )
+
+
+# ============================================================
+# MCMC workload
+# ============================================================
+
+# The 9 calibration metrics (3 fit types × 3 receptors) that observations and
+# forward-model output are keyed by. Used to shape placeholder scaffolding until
+# load_obs_for_window / the real forward model are wired in (see TODOs below).
+_CALIBRATION_METRICS = [
+    "rms__SAN YSIDRO",
+    "rms__NESTOR - BES",
+    "rms__IB CIVIC CTR",
+    "peak_ratio__SAN YSIDRO",
+    "peak_ratio__NESTOR - BES",
+    "peak_ratio__IB CIVIC CTR",
+    "corr__SAN YSIDRO",
+    "corr__NESTOR - BES",
+    "corr__IB CIVIC CTR",
+]
+
+
+@dg.asset(
     group_name="mcmc_posterior",
     op_tags=_WORKER_K8S_TAGS,
     io_manager_key="s3_io",
     required_resource_keys={"s3"},
+    ins={"sobol_aggregate": dg.AssetIn("sobol_aggregate")},
 )
-def mcmc_chain_results(context: AssetExecutionContext) -> dict[str, Any]:
-    raise NotImplementedError("MCMC chain not yet implemented.")
+def mcmc_chain_results(
+    context: AssetExecutionContext,
+    config: McmcConfig,
+    sobol_aggregate: dict[str, Any],
+) -> dict[str, Any]:
+    """Run MCMC posterior sampling using Sobol-informed priors.
+
+    Samples 9 chains × 5000 draws over 11 emission parameters.
+    Uses Sobol ST indices to set prior widths: high-ST → tight,
+    low-ST → wide. Likelihood is a normal fit to the 9 metrics
+    (3 receptors × 3 fit types).
+
+    Returns ArviZ InferenceData as a pickled dict.
+    """
+    import arviz as az
+
+    context.log.info(
+        f"MCMC sampling: {config.n_chains} chains × {config.n_draws - config.n_tune} "
+        f"posterior draws (+ {config.n_tune} tune)"
+    )
+
+    # Build priors from Sobol baseline
+    priors = mcmc.build_priors()
+    context.log.info(f"Priors: {len(priors)} parameters")
+    for p, spec in priors.items():
+        context.log.info(f"  {p}: {spec.dist_type}")
+
+    # TODO: Load observation data for the window
+    # For now, placeholder: forward_model_fn needs to be wired to the actual model
+    # obs = load_obs_for_window(config.window_start, config.window_end)
+    obs = {k: np.random.randn(100) for k in _CALIBRATION_METRICS}  # random ok: placeholder
+
+    # TODO: Wire forward_model_fn to the actual dispersion model
+    def forward_model_fn(params):
+        return {k: np.random.randn(100) for k in obs}  # random ok: placeholder
+
+    model = mcmc.build_model(obs, forward_model_fn, priors, obs_sigma=config.obs_sigma)
+    idata = mcmc.sample_posterior(
+        model,
+        n_chains=config.n_chains,
+        n_draws=config.n_draws,
+        n_tune=config.n_tune,
+        seed=config.seed,
+    )
+
+    context.log.info("MCMC sampling complete; computing diagnostics...")
+    diag = mcmc.diagnostics(idata)
+
+    return {
+        "idata": az.to_dict(idata),
+        "diagnostics": diag,
+        "config": {
+            "n_chains": config.n_chains,
+            "n_draws_posterior": config.n_draws - config.n_tune,
+            "n_tune": config.n_tune,
+            "seed": config.seed,
+            "window": [config.window_start, config.window_end],
+        },
+    }
 
 
 @dg.asset(
@@ -416,12 +599,44 @@ def mcmc_chain_results(context: AssetExecutionContext) -> dict[str, Any]:
     io_manager_key="s3_io",
     required_resource_keys={"s3", "slack"},
 )
-def mcmc_aggregate(context: AssetExecutionContext) -> dict[str, Any]:
-    raise NotImplementedError("MCMC aggregator not yet implemented.")
+def mcmc_aggregate(
+    context: AssetExecutionContext,
+    config: McmcConfig,
+    mcmc_chain_results: dict[str, Any],
+) -> dg.MaterializeResult:
+    """Aggregate MCMC results and surface diagnostics.
+
+    Computes Rhat, effective sample size, and posterior predictive
+    performance on a held-out window (if available).
+    """
+
+    diag = mcmc_chain_results.get("diagnostics", {})
+    config_dict = mcmc_chain_results.get("config", {})
+
+    context.log.info(f"MCMC aggregate: {len(diag)} parameters")
+    converged = diag.get("_summary", {}).get("all_converged", False)
+    max_rhat = diag.get("_summary", {}).get("max_rhat", float("inf"))
+
+    context.log.info(f"Convergence: {'✓' if converged else '✗'} (max Rhat: {max_rhat:.4f})")
+
+    return dg.MaterializeResult(
+        value=mcmc_chain_results,
+        metadata={
+            "n_chains": config_dict.get("n_chains"),
+            "n_posterior_draws": config_dict.get("n_draws_posterior"),
+            "converged": converged,
+            "max_rhat": float(max_rhat),
+            "diagnostics_summary": dg.MetadataValue.md(
+                f"**Convergence**: {'PASS' if converged else 'FAIL'}\n\n"
+                f"**Max Rhat**: {max_rhat:.4f} (threshold: 1.01)\n\n"
+                f"**Parameters**: {len([d for d in diag if d != '_summary'])}"
+            ),
+        },
+    )
 
 
 # ============================================================
-# Cross-validation workload (placeholder)
+# Cross-validation workload (hold-out window evaluation)
 # ============================================================
 
 
@@ -431,9 +646,47 @@ def mcmc_aggregate(context: AssetExecutionContext) -> dict[str, Any]:
     op_tags=_WORKER_K8S_TAGS,
     io_manager_key="s3_io",
     required_resource_keys={"s3"},
+    ins={"mcmc_chain_results": dg.AssetIn("mcmc_chain_results")},
 )
-def cv_fold_results(context: AssetExecutionContext) -> dict[str, Any]:
-    raise NotImplementedError("CV fold not yet implemented.")
+def cv_fold_results(
+    context: AssetExecutionContext,
+    mcmc_chain_results: dict[str, Any],
+) -> dict[str, Any]:
+    """Evaluate posterior predictive on a held-out window.
+
+    Each partition corresponds to one event/window to hold out.
+    Uses the posterior samples from mcmc_chain_results to compute
+    predictions on the held-out data.
+
+    TODO: This is scaffolding. Real implementation should:
+      - Fit MCMC on all windows EXCEPT this one
+      - Evaluate posterior predictive on the held-out window
+      - Return RMSE per metric + overall mean RMSE
+    """
+
+    held_out_event = context.partition_key
+    context.log.info(f"Hold-out CV fold: {held_out_event}")
+
+    # TODO: Load observations for held-out event
+    obs_holdout = {k: np.random.randn(100) for k in _CALIBRATION_METRICS}  # random ok: placeholder
+
+    # TODO: Wire forward_model_fn to actual dispersion model
+    def forward_model_fn(params):
+        return {k: np.random.randn(100) for k in obs_holdout}  # random ok: placeholder
+
+    # TODO: Restore InferenceData from mcmc_chain_results
+    # idata = az.from_dict(mcmc_chain_results.get("idata", {}))
+    # Compute posterior predictive on held-out window
+    cv_metrics = mcmc.posterior_predictive_cv(
+        None,  # idata placeholder — requires wiring
+        forward_model_fn,
+        obs_holdout,
+    )
+
+    return {
+        "held_out_event": held_out_event,
+        "cv_metrics": cv_metrics,
+    }
 
 
 @dg.asset(
@@ -443,8 +696,30 @@ def cv_fold_results(context: AssetExecutionContext) -> dict[str, Any]:
     io_manager_key="s3_io",
     required_resource_keys={"s3", "slack"},
 )
-def cv_aggregate(context: AssetExecutionContext) -> dict[str, Any]:
-    raise NotImplementedError("CV aggregator not yet implemented.")
+def cv_aggregate(
+    context: AssetExecutionContext, cv_fold_results: dict[str, Any]
+) -> dg.MaterializeResult:
+    """Aggregate cross-validation results across all hold-out folds.
+
+    Computes mean RMSE and coverage metrics across folds.
+    """
+    context.log.info("CV aggregate: collecting hold-out fold results...")
+
+    # TODO: Aggregate cv_fold_results from all partitions
+    # For now, placeholder
+    all_cv_metrics = {}
+    mean_rmse = 0.0
+
+    return dg.MaterializeResult(
+        value={"cv_metrics_aggregate": all_cv_metrics},
+        metadata={
+            "n_folds": 0,  # TODO
+            "mean_rmse": float(mean_rmse),
+            "cv_summary": dg.MetadataValue.md(
+                f"**Cross-validation RMSE**: {mean_rmse:.2f} ppb\n\n**Folds evaluated**: 0"  # TODO
+            ),
+        },
+    )
 
 
 # ============================================================

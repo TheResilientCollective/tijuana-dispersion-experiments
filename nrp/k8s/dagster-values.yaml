@@ -70,11 +70,32 @@ runLauncher:
         - name: object-store-credentials
 
 # Built-in Postgres (managed by the Dagster Helm chart).
+# This DB holds all run history, event logs, and schedule/sensor state.
+# It MUST be on a persistent volume or every pod restart wipes the run list.
 generatePostgresqlPasswordSecret: false
 postgresql:
   enabled: true
   postgresqlUsername: dagster
   postgresqlDatabase: dagster
+  # Persist the data dir (/bitnami/postgresql) on a network-backed volume.
+  # Pinned explicitly so it can never silently regress to an emptyDir if a
+  # chart-default changes — losing run history is the failure this prevents.
+  #
+  # storageClass is intentionally LEFT UNSET so it resolves to the NRP
+  # cluster default `rook-ceph-block` (Ceph RBD — network storage that
+  # survives the postgres pod rescheduling across NRP nodes; a node-local
+  # class such as `local-storage` would strand the data on one node).
+  # Do NOT add `storageClass:` here on an existing release: a StatefulSet's
+  # volumeClaimTemplates are immutable, so changing it makes `helm upgrade`
+  # fail. To switch classes you must `kubectl delete statefulset
+  # dagster-postgresql --cascade=orphan` first (keeps the pod + PVC), then
+  # upgrade. The current bound PVC `data-dagster-postgresql-0` is already on
+  # rook-ceph-block, so the values below render an identical template.
+  persistence:
+    enabled: true
+    size: 8Gi
+    accessModes:
+      - ReadWriteOnce
   resources:
     requests:
       cpu: 100m
@@ -103,8 +124,8 @@ dagster-user-deployments:
           memory: 512Mi
       image:
         repository: gitlab-registry.nrp-nautilus.io/ucsd-center4health/nrp-worker
-        tag: "315fdb2-pg"
-        pullPolicy: IfNotPresent
+        tag: "dev"
+        pullPolicy: Always
       dagsterApiGrpcArgs:
         - "-m"
         - "nrp.definitions"

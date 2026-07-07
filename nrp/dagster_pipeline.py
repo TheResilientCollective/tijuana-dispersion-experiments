@@ -142,9 +142,13 @@ class McmcConfig(dg.Config):
     partition; the aggregator collects all chains and computes diagnostics.
     """
 
-    n_chains: int = 9
-    n_draws: int = 5000
-    n_tune: int = 2500
+    # SMC config. n_draws is the number of SMC *particles* per chain (not
+    # NUTS draws); n_tune is unused under SMC (no separate tuning phase)
+    # and kept only so older call sites don't break. Each particle costs a
+    # full dispersion forward run over the window, so scale deliberately.
+    n_chains: int = 4
+    n_draws: int = 2000
+    n_tune: int = 0
     seed: int = 42
     window_start: str = sobol.DEFAULT_WINDOW[0]
     window_end: str = sobol.DEFAULT_WINDOW[1]
@@ -579,27 +583,40 @@ def mcmc_chain_results(
     """
     import arviz as az
 
+    # Real observations + forward model, reusing the exact Sobol machinery
+    # so the calibration science is identical to the sensitivity analysis:
+    # observed H2S series per receptor over the window, and the published
+    # tijuana_dispersion forward model via sobol.predict_concentrations.
+    df = sobol.load_window(sobol.DEFAULT_PARQUET, (config.window_start, config.window_end))
+    drivers, met, hours = sobol.make_drivers_and_met(df)
+    obs_mat = sobol.build_obs(df, hours, sobol.RECEPTOR_NAMES)  # (n_hours, n_receptors)
+    valid = ~np.isnan(obs_mat)
+    obs_flat = obs_mat[valid]
+    if obs_flat.size == 0:
+        raise ValueError("No H2S observations in the window — cannot calibrate.")
+
+    param_names = list(sobol.PARAM_RANGES)
+
+    def forward_model_fn(params: dict[str, float]) -> np.ndarray:
+        """Concrete param dict → predicted concentrations at the valid obs points."""
+        row = np.array([params[n] for n in param_names], dtype=float)
+        pred = sobol.predict_concentrations(row, param_names, drivers, met)
+        return pred[valid]
+
+    # Sobol-informed priors from THIS study's ST indices (not a hardcoded table).
+    sobol_indices = pd.DataFrame(sobol_aggregate["indices"])
+    priors = mcmc.build_priors(sobol_indices=sobol_indices)
     context.log.info(
-        f"MCMC sampling: {config.n_chains} chains × {config.n_draws - config.n_tune} "
-        f"posterior draws (+ {config.n_tune} tune)"
+        "MCMC: %d obs points, %d params; SMC %d chains × %d particles (window %s→%s)",
+        obs_flat.size,
+        len(param_names),
+        config.n_chains,
+        config.n_draws,
+        config.window_start,
+        config.window_end,
     )
 
-    # Build priors from Sobol baseline
-    priors = mcmc.build_priors()
-    context.log.info(f"Priors: {len(priors)} parameters")
-    for p, spec in priors.items():
-        context.log.info(f"  {p}: {spec.dist_type}")
-
-    # TODO: Load observation data for the window
-    # For now, placeholder: forward_model_fn needs to be wired to the actual model
-    # obs = load_obs_for_window(config.window_start, config.window_end)
-    obs = {k: np.random.randn(100) for k in _CALIBRATION_METRICS}  # random ok: placeholder
-
-    # TODO: Wire forward_model_fn to the actual dispersion model
-    def forward_model_fn(params):
-        return {k: np.random.randn(100) for k in obs}  # random ok: placeholder
-
-    model = mcmc.build_model(obs, forward_model_fn, priors, obs_sigma=config.obs_sigma)
+    model = mcmc.build_model(obs_flat, forward_model_fn, priors, obs_sigma=config.obs_sigma)
     idata = mcmc.sample_posterior(
         model,
         n_chains=config.n_chains,
@@ -608,18 +625,23 @@ def mcmc_chain_results(
         seed=config.seed,
     )
 
-    context.log.info("MCMC sampling complete; computing diagnostics...")
     diag = mcmc.diagnostics(idata)
+    context.log.info(
+        "MCMC complete: max Rhat %.4f, converged=%s",
+        diag["_summary"]["max_rhat"],
+        diag["_summary"]["all_converged"],
+    )
 
     return {
         "idata": az.to_dict(idata),
         "diagnostics": diag,
         "config": {
             "n_chains": config.n_chains,
-            "n_draws_posterior": config.n_draws - config.n_tune,
-            "n_tune": config.n_tune,
+            "n_particles": config.n_draws,
             "seed": config.seed,
             "window": [config.window_start, config.window_end],
+            "obs_sigma": config.obs_sigma,
+            "n_obs": int(obs_flat.size),
         },
     }
 
@@ -655,7 +677,7 @@ def mcmc_aggregate(
         value=mcmc_chain_results,
         metadata={
             "n_chains": config_dict.get("n_chains"),
-            "n_posterior_draws": config_dict.get("n_draws_posterior"),
+            "n_particles": config_dict.get("n_particles"),
             "converged": converged,
             "max_rhat": float(max_rhat),
             "diagnostics_summary": dg.MetadataValue.md(

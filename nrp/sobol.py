@@ -261,19 +261,20 @@ def build_obs(df_window: pd.DataFrame, hours: pd.DatetimeIndex, names: list[str]
     return obs
 
 
-def evaluate_sample(
+def predict_concentrations(
     sample_row: np.ndarray,
     param_names: list[str],
     drivers: list[EmissionDrivers],
     met: list[MetSpec],
-    obs: np.ndarray,
-) -> dict[str, float]:
-    """Evaluate one parameter vector → the 9 scalar fit metrics.
+) -> np.ndarray:
+    """Run the ``tijuana_dispersion`` forward model for one parameter vector.
 
-    Mirrors the prototype's ``evaluate_one``; uses the published
-    ``tijuana_dispersion`` forward model through the service request
-    object so the science is identical to the calibration line. The
-    service import is lazy (deferred ``service`` extra).
+    Returns the ``(n_hours, n_receptors)`` predicted H2S concentration
+    matrix (ppb), receptor order = :data:`RECEPTOR_NAMES`. This is the
+    shared forward pass used by both the Sobol metrics
+    (:func:`evaluate_sample`) and the MCMC likelihood, so the science is
+    identical across workloads. The service import is lazy (deferred
+    ``service`` extra).
     """
     from tijuana_dispersion import (
         EmissionParameters,
@@ -327,6 +328,23 @@ def evaluate_sample(
             ),
         )
         pred[t_idx] = np.asarray(res.concentrations)[0]
+    return pred
+
+
+def evaluate_sample(
+    sample_row: np.ndarray,
+    param_names: list[str],
+    drivers: list[EmissionDrivers],
+    met: list[MetSpec],
+    obs: np.ndarray,
+) -> dict[str, float]:
+    """Evaluate one parameter vector → the 9 scalar fit metrics.
+
+    Mirrors the prototype's ``evaluate_one``; uses the published
+    ``tijuana_dispersion`` forward model (via :func:`predict_concentrations`)
+    so the science is identical to the calibration line.
+    """
+    pred = predict_concentrations(sample_row, param_names, drivers, met)
 
     out: dict[str, float] = {}
     for r_idx, name in enumerate(RECEPTOR_NAMES):

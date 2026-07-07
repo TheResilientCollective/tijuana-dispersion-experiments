@@ -6,6 +6,7 @@ Samples posterior over 11 emission parameters via PyMC.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -13,27 +14,29 @@ import arviz as az
 import numpy as np
 import pandas as pd
 import pymc as pm
+import pytensor.tensor as pt
+from pytensor.graph.basic import Apply
+from pytensor.graph.op import Op
 
 from nrp.sobol import PARAM_RANGES
 
-# Sobol ST indices from the baseline (2026-03-13) Sobol run.
-# Used to set prior widths: high-ST → tight, low-ST → wide.
-SOBOL_BASELINE_ST = {
-    "baseline_scale": 0.35,
-    "substrate_threshold": 0.44,
-    "diel_phase_hours": 0.77,
-    "diel_amplitude_ppb": 0.06,
-    "T_ref_c": 0.28,
-    "Q10_warm": 0.04,
-    "Q10_cool": 0.02,
-    "f_arch_bay": 0.0,
-    "f_arch_estuary": 0.15,
-    "f_arch_channel": 0.01,
-    "n_hours_window": 0.18,
-}
-
-# ST threshold: params with ST > this get tight priors.
+# ST threshold: params with mean ST above this are treated as
+# well-identified and get a weakly-informative (truncated Normal) prior;
+# the rest get a wide Uniform over the feasible range. The likelihood
+# still dominates — the Normal sigma is a sizeable fraction of the range.
 ST_THRESHOLD = 0.10
+
+
+def sobol_st_by_param(sobol_indices: pd.DataFrame | None) -> dict[str, float]:
+    """Mean total-order ST per parameter from a Sobol indices table.
+
+    Expects columns ``parameter`` and ``ST`` (as produced by
+    ``sobol_aggregate``). Returns ``{}`` when no indices are supplied so
+    callers fall back to non-informative priors.
+    """
+    if sobol_indices is None or len(sobol_indices) == 0:
+        return {}
+    return sobol_indices.groupby("parameter")["ST"].mean().to_dict()
 
 
 @dataclass(frozen=True)
@@ -41,41 +44,43 @@ class PriorSpec:
     """Prior specification for one parameter."""
 
     name: str
-    dist_type: str  # "normal", "uniform", "lognormal"
-    mu: float | None = None  # mean (for normal, lognormal)
-    sigma: float | None = None  # std (for normal, lognormal)
+    dist_type: str  # "normal" (truncated) or "uniform"
+    mu: float | None = None  # mean (for normal)
+    sigma: float | None = None  # std (for normal)
     low: float | None = None  # lower bound (for uniform)
     high: float | None = None  # upper bound (for uniform)
-    bounds: tuple[float, float] | None = None  # (low, high) for truncated dists
+    bounds: tuple[float, float] | None = None  # (low, high) truncation for normal
 
 
 def build_priors(
     sobol_indices: pd.DataFrame | None = None,
 ) -> dict[str, PriorSpec]:
-    """Build prior specs based on Sobol ST indices.
+    """Build prior specs, Sobol-informed when indices are supplied.
 
-    High-ST params get tight Normal priors centered on LHS best-fit.
-    Low-ST params get wide Uniform priors over the feasible range.
+    High-ST params (well-identified) get a truncated Normal centred on
+    the range midpoint; low-ST params get a wide Uniform over the
+    feasible range. Parameter order follows :data:`PARAM_RANGES`. When
+    ``sobol_indices`` is None every parameter falls back to Uniform.
     """
-    priors = {}
+    st_by_param = sobol_st_by_param(sobol_indices)
+    priors: dict[str, PriorSpec] = {}
 
     for param_name, (low, high) in PARAM_RANGES.items():
-        st = SOBOL_BASELINE_ST.get(param_name, 0.0)
+        st = float(st_by_param.get(param_name, 0.0))
         mid = (low + high) / 2
         width = high - low
 
         if st > ST_THRESHOLD:
-            # High-ST: tight Normal prior around midpoint
-            sigma = 0.05 * width
+            # Well-identified: weakly-informative truncated Normal. sigma
+            # is 1/4 of the range so the data still drives the posterior.
             priors[param_name] = PriorSpec(
                 name=param_name,
                 dist_type="normal",
                 mu=mid,
-                sigma=sigma,
+                sigma=0.25 * width,
                 bounds=(low, high),
             )
         else:
-            # Low-ST: wide Uniform prior
             priors[param_name] = PriorSpec(
                 name=param_name,
                 dist_type="uniform",
@@ -86,85 +91,118 @@ def build_priors(
     return priors
 
 
+def _gaussian_loglike(
+    obs_flat: np.ndarray,
+    forward_model_fn: Callable[[dict[str, float]], np.ndarray],
+    param_order: list[str],
+    obs_sigma: float,
+) -> Callable[[np.ndarray], float]:
+    """Build a scalar Gaussian log-likelihood over a concrete param vector.
+
+    The returned closure maps a plain float vector (parameter values in
+    ``param_order``) to ``log N(obs | forward_model(params), obs_sigma)``.
+    It never touches PyTensor — it is the black box the Op wraps.
+    """
+    obs_flat = np.asarray(obs_flat, dtype="float64")
+    norm_const = obs_flat.size * float(np.log(obs_sigma * np.sqrt(2.0 * np.pi)))
+
+    def loglike(theta: np.ndarray) -> float:
+        params = dict(zip(param_order, np.asarray(theta, dtype="float64"), strict=True))
+        pred = np.asarray(forward_model_fn(params), dtype="float64")
+        if pred.shape != obs_flat.shape or not np.all(np.isfinite(pred)):
+            return -np.inf
+        resid = obs_flat - pred
+        return float(-0.5 * np.sum((resid / obs_sigma) ** 2) - norm_const)
+
+    return loglike
+
+
+class _LogLikeOp(Op):
+    """PyTensor Op wrapping a black-box (numpy) scalar log-likelihood.
+
+    The ``tijuana_dispersion`` forward model is opaque numpy, so it cannot
+    live inside a PyMC symbolic graph. This Op evaluates it in ``perform``
+    on concrete values and returns the scalar logp. No gradient is defined
+    — SMC (``pm.sample_smc``) is gradient-free, so none is needed.
+    """
+
+    def __init__(self, loglike: Callable[[np.ndarray], float]) -> None:
+        self._loglike = loglike
+
+    def make_node(self, theta):
+        theta = pt.as_tensor_variable(theta)
+        return Apply(self, [theta], [pt.scalar(dtype="float64")])
+
+    def perform(self, node, inputs, outputs):
+        (theta,) = inputs
+        outputs[0][0] = np.asarray(self._loglike(theta), dtype="float64")
+
+
 def build_model(
-    obs: dict[str, np.ndarray],
-    forward_model_fn,
+    obs_flat: np.ndarray,
+    forward_model_fn: Callable[[dict[str, float]], np.ndarray],
     priors: dict[str, PriorSpec],
     obs_sigma: float = 10.0,
 ) -> pm.Model:
-    """Construct PyMC model for MCMC sampling.
+    """Construct a PyMC model with a black-box (SMC-ready) likelihood.
 
     Args:
-        obs: dict with keys like "rms__SAN YSIDRO", "peak_ratio__NESTOR - BES", etc.
-             values are numpy arrays of observations
-        forward_model_fn: callable(params_dict) -> dict with same keys as obs
-        priors: dict of PriorSpec, one per parameter
-        obs_sigma: observation noise std (ppb)
+        obs_flat: 1D array of observed concentrations (valid entries only).
+        forward_model_fn: callable(params_dict) -> 1D array aligned to
+            ``obs_flat`` (same length/order). Runs the real dispersion model.
+        priors: one PriorSpec per parameter; iteration order fixes the
+            parameter vector order handed to ``forward_model_fn``.
+        obs_sigma: observation noise std (ppb).
 
     Returns:
-        PyMC Model ready for sampling
+        PyMC Model ready for ``sample_posterior`` (SMC).
     """
-    model = pm.Model()
+    param_order = list(priors)
+    loglike_op = _LogLikeOp(
+        _gaussian_loglike(obs_flat, forward_model_fn, param_order, obs_sigma),
+    )
 
-    with model:
-        # Define priors
-        param_rvs = {}
-        for param_name, spec in priors.items():
+    with pm.Model() as model:
+        rvs = []
+        for name in param_order:
+            spec = priors[name]
             if spec.dist_type == "normal":
-                param_rvs[param_name] = pm.Normal(
-                    param_name,
-                    mu=spec.mu,
-                    sigma=spec.sigma,
-                    bounds=spec.bounds,
+                low, high = spec.bounds
+                rvs.append(
+                    pm.TruncatedNormal(name, mu=spec.mu, sigma=spec.sigma, lower=low, upper=high),
                 )
-            elif spec.dist_type == "uniform":
-                param_rvs[param_name] = pm.Uniform(
-                    param_name,
-                    lower=spec.low,
-                    upper=spec.high,
-                )
-
-        # Likelihood
-        pred = pm.math.as_tensor_variable(
-            forward_model_fn(param_rvs),
-        )
-
-        # Flatten observations to 1D for likelihood
-        obs_flat = np.concatenate([v.flatten() for v in obs.values()])
-
-        pm.Normal("likelihood", mu=pred, sigma=obs_sigma, observed=obs_flat)
+            else:
+                rvs.append(pm.Uniform(name, lower=spec.low, upper=spec.high))
+        theta = pt.stack(rvs)
+        pm.Potential("likelihood", loglike_op(theta))
 
     return model
 
 
 def sample_posterior(
     model: pm.Model,
-    n_chains: int = 9,
-    n_draws: int = 5000,
-    n_tune: int = 2500,
+    n_chains: int = 4,
+    n_draws: int = 2000,
+    n_tune: int = 0,  # unused for SMC; kept for call-site compatibility
     seed: int = 42,
+    cores: int | None = None,
 ) -> az.InferenceData:
-    """Sample posterior using NUTS sampler.
+    """Sample the posterior with Sequential Monte Carlo.
 
-    Args:
-        model: PyMC Model
-        n_chains: number of parallel chains
-        n_draws: total draws per chain (includes tune)
-        n_tune: burn-in iterations per chain
-        seed: random seed
+    SMC is gradient-free, so it handles the black-box dispersion
+    likelihood (which NUTS cannot). ``n_draws`` is the number of SMC
+    particles per chain; ``n_tune`` is ignored (SMC has no separate
+    tuning phase) and accepted only so existing call sites don't break.
 
-    Returns:
-        ArviZ InferenceData object with posterior samples + diagnostics
+    Returns ArviZ InferenceData with the posterior samples.
     """
     with model:
-        idata = pm.sample(
-            draws=n_draws - n_tune,
-            tune=n_tune,
+        idata = pm.sample_smc(
+            draws=n_draws,
             chains=n_chains,
-            cores=min(n_chains, 8),
+            cores=cores if cores is not None else min(n_chains, 8),
             random_seed=seed,
-            return_inferencedata=True,
-            progressbar=True,
+            progressbar=False,
         )
 
     return idata
@@ -180,19 +218,19 @@ def diagnostics(idata: az.InferenceData) -> dict[str, Any]:
         dict with Rhat, n_eff per param, plus overall convergence status
     """
     rhat = az.rhat(idata)
-    eff_n = az.ess_bulk(idata)
+    eff_n = az.ess(idata, method="bulk")
 
-    diag = {}
+    diag: dict[str, Any] = {}
     for var_name in idata.posterior.data_vars:
         r = float(rhat[var_name].values.mean())
         n_e = float(eff_n[var_name].values.mean())
         diag[var_name] = {"rhat": r, "n_eff": n_e, "converged": r < 1.01}
 
-    all_converged = all(d["converged"] for d in diag.values())
+    per_param = list(diag.values())
     diag["_summary"] = {
-        "all_converged": all_converged,
-        "n_params": len(diag) - 1,
-        "max_rhat": max(d["rhat"] for d in diag.values() if d != diag["_summary"]),
+        "all_converged": all(d["converged"] for d in per_param),
+        "n_params": len(per_param),
+        "max_rhat": max((d["rhat"] for d in per_param), default=float("nan")),
     }
 
     return diag

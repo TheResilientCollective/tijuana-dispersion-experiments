@@ -174,6 +174,17 @@ def sobol_chunk_results(
     samples = sobol.build_samples(config.n_base_samples, seed=config.seed)
     bounds = sobol.chunk_bounds(samples.shape[0], N_SOBOL_CHUNKS)
     start, end = bounds[chunk_idx]
+
+    # Carry the run config in the chunk's own value. Downstream assets
+    # (sobol_aggregate → sobol_post_analysis) read it from the data instead
+    # of run config, so declarative-automation runs — which get no run
+    # config — still tag the archive with the correct window/N/seed.
+    cfg_meta = {
+        "window_start": config.window_start,
+        "window_end": config.window_end,
+        "n_base_samples": config.n_base_samples,
+        "seed": config.seed,
+    }
     log.info(
         "sobol chunk %s: rows [%d, %d) of %d",
         context.partition_key,
@@ -185,7 +196,14 @@ def sobol_chunk_results(
     if start == end:
         # Empty chunk (n_samples < N_SOBOL_CHUNKS): valid, returns no rows.
         return dg.MaterializeResult(
-            value={"start": start, "end": end, "param_names": [], "metric_columns": [], "rows": []},
+            value={
+                "start": start,
+                "end": end,
+                "param_names": [],
+                "metric_columns": [],
+                "rows": [],
+                "config": cfg_meta,
+            },
             metadata={"n_samples": 0, "row_start": start, "row_end": end},
         )
 
@@ -208,6 +226,7 @@ def sobol_chunk_results(
             "param_names": problem["names"],
             "metric_columns": sobol.OUTPUT_COLUMNS,
             "rows": rows,
+            "config": cfg_meta,
         },
         metadata={
             "n_samples": len(rows),
@@ -223,6 +242,11 @@ def sobol_chunk_results(
     op_tags=_AGGREGATOR_K8S_TAGS,
     io_manager_key="s3_io",
     required_resource_keys={"slack"},
+    # Self-driving: materialise once all 100 chunk partitions are present
+    # and at least one is newly updated (eager holds until no dep is
+    # missing). Kicking off the chunk backfill is the only manual step;
+    # aggregation then fires automatically — no more manual `dg launch`.
+    automation_condition=dg.AutomationCondition.eager(),
     ins={
         "chunks": dg.AssetIn(
             "sobol_chunk_results",
@@ -246,6 +270,9 @@ def sobol_aggregate(
 
     asm = sobol.reassemble(chunks)
     param_names = asm["param_names"]
+    # Config travels with the data (every chunk carries an identical copy),
+    # so post-analysis can tag the archive correctly under automation.
+    run_cfg = next(iter(chunks.values()), {}).get("config")
     problem = sobol.build_problem()
     frames: list[Any] = []
     for m in asm["metric_columns"]:
@@ -270,7 +297,7 @@ def sobol_aggregate(
     )
 
     return dg.MaterializeResult(
-        value={"indices": indices.to_dict(orient="records")},
+        value={"indices": indices.to_dict(orient="records"), "config": run_cfg},
         metadata={
             "n_samples": asm["n_samples"],
             "n_metrics_analysed": len(frames),
@@ -290,6 +317,8 @@ def sobol_aggregate(
     op_tags=_AGGREGATOR_K8S_TAGS,
     io_manager_key="s3_io",
     # required_resource_keys={"s3"},
+    # Self-driving: fire as soon as sobol_aggregate is (re)materialised.
+    automation_condition=dg.AutomationCondition.eager(),
     ins={"sobol_aggregate": dg.AssetIn("sobol_aggregate")},
 )
 def sobol_post_analysis(
@@ -327,12 +356,15 @@ def sobol_post_analysis(
     inter = sobol.interaction_table(indices)
     drops = sobol.dropout_candidates(indices)
 
-    tag = sobol.run_tag(
-        config.window_start,
-        config.window_end,
-        config.n_base_samples,
-        config.seed,
-    )
+    # Prefer config carried with the data (correct under automation, where
+    # there is no run config); fall back to run config for manual launches.
+    carried = sobol_aggregate.get("config") or {}
+    window_start = carried.get("window_start", config.window_start)
+    window_end = carried.get("window_end", config.window_end)
+    n_base_samples = carried.get("n_base_samples", config.n_base_samples)
+    seed = carried.get("seed", config.seed)
+
+    tag = sobol.run_tag(window_start, window_end, n_base_samples, seed)
 
     # ----- archival snapshot to s3://<bucket>/runs/sobol/{tag}/ -----
     bucket = os.getenv("DAGSTER_S3_BUCKET")
@@ -352,9 +384,9 @@ def sobol_post_analysis(
         # 2) diagnostics + summaries, machine-readable
         analysis = {
             "tag": tag,
-            "window": [config.window_start, config.window_end],
-            "n_base_samples": config.n_base_samples,
-            "seed": config.seed,
+            "window": [window_start, window_end],
+            "n_base_samples": n_base_samples,
+            "seed": seed,
             "convergence": diag,
             "global_ranking": glob.to_dict(orient="records"),
             "top_n_per_metric": topn.to_dict(orient="records"),
@@ -372,8 +404,8 @@ def sobol_post_analysis(
         # 3) human-readable summary
         md = (
             f"# Sobol run `{tag}`\n\n"
-            f"window: **{config.window_start} → {config.window_end}** | "
-            f"N={config.n_base_samples} | seed={config.seed}\n\n"
+            f"window: **{window_start} → {window_end}** | "
+            f"N={n_base_samples} | seed={seed}\n\n"
             f"**Converged: {diag['is_converged']}** "
             f"(median ST_conf/|ST| {diag['st_conf_over_st_median']:.3f}, "
             f"p90 {diag['st_conf_over_st_p90']:.3f}, "
@@ -396,9 +428,9 @@ def sobol_post_analysis(
         manifest = RunManifest(
             kind="sobol",
             tag=tag,
-            window=[config.window_start, config.window_end],
-            n_base_samples=config.n_base_samples,
-            seed=config.seed,
+            window=[window_start, window_end],
+            n_base_samples=n_base_samples,
+            seed=seed,
             git_sha=git_sha,
             image_digest=image_digest,
             status="complete",
@@ -779,6 +811,17 @@ sobol_aggregate_job = dg.define_asset_job(
     selection=dg.AssetSelection.assets("sobol_aggregate", "sobol_post_analysis"),
 )
 
+# Evaluates the AutomationConditions on the Sobol aggregate chain so it is
+# self-driving: when the 100-partition chunk backfill finishes, sobol_aggregate
+# then sobol_post_analysis materialise automatically (no manual dg launch).
+# RUNNING by default so it activates on deploy; the daemon runs the evaluation
+# tick (same daemon that runs the run queue and backfills).
+sobol_automation_sensor = dg.AutomationConditionSensorDefinition(
+    name="sobol_automation_sensor",
+    target=dg.AssetSelection.assets("sobol_aggregate", "sobol_post_analysis"),
+    default_status=dg.DefaultSensorStatus.RUNNING,
+)
+
 
 defs = dg.Definitions(
     jobs=[sobol_aggregate_job],
@@ -794,6 +837,7 @@ defs = dg.Definitions(
     sensors=[
         nrp_run_failure_to_slack,
         nrp_run_start_to_slack,
+        sobol_automation_sensor,
     ],
     resources={
         # S3 client. Configure endpoint_url for non-AWS S3-compatible stores

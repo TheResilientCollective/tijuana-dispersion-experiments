@@ -124,7 +124,10 @@ dagster-user-deployments:
           memory: 512Mi
       image:
         repository: gitlab-registry.nrp-nautilus.io/ucsd-center4health/nrp-worker
-        tag: "dev"
+        # SHA-pinned, NOT :dev — step pods use imagePullPolicy IfNotPresent
+        # (runLauncher), so a mutable :dev tag can leave stale code cached on
+        # nodes. An immutable per-commit tag forces a fresh pull everywhere.
+        tag: "df049ab"
         pullPolicy: Always
       dagsterApiGrpcArgs:
         - "-m"

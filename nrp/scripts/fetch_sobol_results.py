@@ -96,7 +96,7 @@ def _load_s3_latest(bucket: str, endpoint_url: str | None) -> pd.DataFrame:
 def _load_s3_archive(bucket: str, endpoint_url: str | None, tag: str) -> pd.DataFrame:
     """Read the archival snapshot written by ``sobol_post_analysis``."""
     s3 = _s3_client(endpoint_url)
-    key = f"runs/{tag}/sobol_indices.parquet"
+    key = f"runs/sobol/{tag}/sobol_indices.parquet"
     obj = s3.get_object(Bucket=bucket, Key=key)
     import io as _io
 
@@ -144,7 +144,7 @@ def main() -> int:
     )
 
     if have_s3 and args.run_tag:
-        src = f"s3://{args.bucket}/runs/{args.run_tag}/sobol_indices.parquet"
+        src = f"s3://{args.bucket}/runs/sobol/{args.run_tag}/sobol_indices.parquet"
     elif have_s3:
         src = f"s3://{args.bucket}/dagster/runs/sobol_aggregate (latest run pointer)"
     else:

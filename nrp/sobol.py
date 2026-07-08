@@ -99,18 +99,23 @@ def _locations() -> list[SourceSpecLocation]:
 
 
 # 11 parameters, physically-motivated bounds (identical to the prototype).
+# Ranges widened 2026-07-08 after the first 8-chain MCMC posterior railed
+# several parameters against their bounds (Q10→lower, substrate_alpha /
+# diel_amplitude / f_arch_bay / f_arch_channel→upper). The data wanted room
+# outside the original box; these bounds give it. Shared by Sobol and MCMC
+# (MCMC priors derive from these), so the parameter space stays consistent.
 PARAM_RANGES: dict[str, tuple[float, float]] = {
     "baseline_scale": (1.0, 200.0),
-    "Q10": (1.5, 3.5),
+    "Q10": (1.0, 3.5),  # widened low: posterior floored at 1.5
     "T_ref_c": (10.0, 30.0),
-    "substrate_alpha": (0.0, 0.5),
+    "substrate_alpha": (0.0, 1.0),  # widened high: posterior at 0.49/0.5
     "substrate_threshold": (10.0, 40.0),
-    "diel_amplitude": (1.0, 5.0),
+    "diel_amplitude": (1.0, 10.0),  # widened high: posterior at 4.93/5.0
     "diel_phase_hours": (0.0, 12.0),
     "f_arch_drain": (0.5, 5.0),
-    "f_arch_channel": (0.1, 2.0),
+    "f_arch_channel": (0.1, 4.0),  # widened high: posterior HDI to 1.94/2.0
     "f_arch_estuary": (0.1, 3.0),
-    "f_arch_bay": (0.0, 0.5),
+    "f_arch_bay": (0.0, 2.0),  # widened high: posterior HDI to 0.5/0.5
 }
 
 # Scalar fit metrics fed to Sobol analysis: 3 receptors × 3 metrics = 9.

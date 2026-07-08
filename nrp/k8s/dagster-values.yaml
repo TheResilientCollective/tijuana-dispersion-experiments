@@ -52,12 +52,25 @@ dagsterDaemon:
   # comfortably under 100 and pulls the image in waves. 100 chunks then
   # run ~4 waves; wall-clock is barely affected because waves overlap
   # (a new run dequeues the moment one finishes).
+  #
+  # NRP also caps a user at 4 concurrent "resource-using" pods — any pod
+  # requesting more than 1 CPU / 2GB. Pods requesting exactly 1 CPU / 2GB
+  # are exempt (so the Sobol chunk workers, limits 1 CPU / 2Gi, fan out
+  # freely). The MCMC chain pods are 8Gi / 2 CPU → NOT exempt → only 4 may
+  # run at once. The tagConcurrencyLimits below throttle any run tagged
+  # `calibration/workload=mcmc` to 4, so an 8-chain backfill runs 4-at-a-
+  # time instead of losing the overflow to eviction. Submit MCMC backfills
+  # with that run tag (scripts/submit_mcmc or the GraphQL `tags` field).
   runCoordinator:
     enabled: true
     type: QueuedRunCoordinator
     config:
       queuedRunCoordinator:
         maxConcurrentRuns: 25
+        tagConcurrencyLimits:
+          - key: "calibration/workload"
+            value: "mcmc"
+            limit: 4
 
 dagsterWebserver:
   replicaCount: 1

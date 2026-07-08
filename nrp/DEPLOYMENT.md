@@ -350,6 +350,19 @@ status and archive tag — copy the tags into `fetch_sobol_results.py
 - **Backfill submission**: The `dg launch` CLI cannot submit
   multi-partition backfills. Use the GraphQL API via
   `nrp/scripts/_submit_backfill.py`.
+- **NRP 4-pod policy** (seen 2026-07-08, root-caused the MCMC chain
+  failures): a user may run **at most 4 concurrent pods** that are
+  "resource-using", i.e. that request more than **1 CPU / 2GB memory**.
+  Pods requesting *exactly* 1 CPU core and 2GB memory are **exempt** and
+  can run in unlimited numbers. Implications for this repo:
+  - Sobol chunk workers (`_WORKER_K8S_TAGS`, limits 1 CPU / 2Gi) are
+    exempt → the 100-chunk backfill fans out freely.
+  - MCMC chain pods (`_MCMC_K8S_TAGS`, 8Gi / 2 CPU limits) are NOT
+    exempt → only 4 run at once; a >4-wide chain backfill loses the
+    overflow to eviction ~minutes in. Run MCMC chains in **waves of
+    ≤4**, or make the pods exempt (request=limit 1 CPU / 2Gi) and shrink
+    the per-chain particle count so a single SMC chain fits 2Gi.
+  - The exemption keys off the pod's *request/limit*, not observed use.
 - **Code-location readiness probe** (seen 2026-07-07): the chart's
   default readiness probe runs `dagster api grpc-health-check -p 3030`
   with a 10s timeout. Under the 500m CPU limit the CLI startup exceeds

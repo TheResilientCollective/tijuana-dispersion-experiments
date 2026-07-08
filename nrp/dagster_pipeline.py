@@ -107,6 +107,21 @@ _AGGREGATOR_K8S_TAGS = {
     },
 }
 
+# MCMC gets its own (larger) profile so SMC chains run in parallel: cores =
+# min(n_chains, 8), so give the pod enough CPU to actually parallelize them.
+# NOT shared with the Sobol chunk worker (which fans out 25-wide — 4 CPU
+# each would blow the namespace quota).
+_MCMC_K8S_TAGS = {
+    "dagster-k8s/config": {
+        "container_config": {
+            "resources": {
+                "requests": {"cpu": "2", "memory": "4Gi"},
+                "limits": {"cpu": "4", "memory": "8Gi"},
+            },
+        },
+    },
+}
+
 
 # ============================================================
 # Sobol sensitivity workload
@@ -562,7 +577,7 @@ _CALIBRATION_METRICS = [
 
 @dg.asset(
     group_name="mcmc_posterior",
-    op_tags=_WORKER_K8S_TAGS,
+    op_tags=_MCMC_K8S_TAGS,
     io_manager_key="s3_io",
     required_resource_keys={"s3"},
     ins={"sobol_aggregate": dg.AssetIn("sobol_aggregate")},

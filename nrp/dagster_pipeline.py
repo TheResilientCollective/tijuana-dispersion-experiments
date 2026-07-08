@@ -581,8 +581,6 @@ def mcmc_chain_results(
 
     Returns ArviZ InferenceData as a pickled dict.
     """
-    import arviz as az
-
     # Real observations + forward model, reusing the exact Sobol machinery
     # so the calibration science is identical to the sensitivity analysis:
     # observed H2S series per receptor over the window, and the published
@@ -633,7 +631,7 @@ def mcmc_chain_results(
     )
 
     return {
-        "idata": az.to_dict(idata),
+        "idata": idata.to_dict(),
         "diagnostics": diag,
         "config": {
             "n_chains": config.n_chains,

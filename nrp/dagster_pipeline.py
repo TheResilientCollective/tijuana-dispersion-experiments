@@ -107,16 +107,16 @@ _AGGREGATOR_K8S_TAGS = {
     },
 }
 
-# MCMC gets its own (larger) profile so SMC chains run in parallel: cores =
-# min(n_chains, 8), so give the pod enough CPU to actually parallelize them.
-# NOT shared with the Sobol chunk worker (which fans out 25-wide — 4 CPU
-# each would blow the namespace quota).
+# MCMC runs ONE SMC chain per partition/pod (see mcmc_chain_results), so
+# each pod is single-process (cores=1) and gets the full memory to itself —
+# no cross-chain contention. This is what fixed the 8Gi OOM that hit when
+# 4 chains shared one pod. 8Gi is generous headroom for a single chain.
 _MCMC_K8S_TAGS = {
     "dagster-k8s/config": {
         "container_config": {
             "resources": {
-                "requests": {"cpu": "2", "memory": "4Gi"},
-                "limits": {"cpu": "4", "memory": "8Gi"},
+                "requests": {"cpu": "1", "memory": "2Gi"},
+                "limits": {"cpu": "2", "memory": "8Gi"},
             },
         },
     },
@@ -576,6 +576,7 @@ _CALIBRATION_METRICS = [
 
 
 @dg.asset(
+    partitions_def=mcmc_partitions,
     group_name="mcmc_posterior",
     op_tags=_MCMC_K8S_TAGS,
     io_manager_key="s3_io",
@@ -587,19 +588,23 @@ def mcmc_chain_results(
     config: McmcConfig,
     sobol_aggregate: dict[str, Any],
 ) -> dict[str, Any]:
-    """Run MCMC posterior sampling using Sobol-informed priors.
+    """Run ONE SMC chain (this partition) of the MCMC calibration.
 
-    Samples 9 chains × 5000 draws over 11 emission parameters.
-    Uses Sobol ST indices to set prior widths: high-ST → tight,
-    low-ST → wide. Likelihood is a normal fit to the 9 metrics
-    (3 receptors × 3 fit types).
+    One partition = one independent chain, each in its own K8s pod (the
+    README's fan-out design). This isolates each chain's memory — the
+    single-pod, all-chains-at-once approach OOMKilled at 8Gi. Chains
+    differ only by seed (``config.seed + chain_idx``); mcmc_aggregate
+    concatenates them for cross-chain Rhat/ESS.
 
-    Returns ArviZ InferenceData as a pickled dict.
+    Uses Sobol-informed priors and the published tijuana_dispersion
+    forward model (via sobol.predict_concentrations) against the observed
+    H2S series. Returns a single-chain ArviZ InferenceData as a dict.
     """
+    chain_idx = int(context.partition_key.split("_")[1])
+    chain_seed = config.seed + chain_idx
+
     # Real observations + forward model, reusing the exact Sobol machinery
-    # so the calibration science is identical to the sensitivity analysis:
-    # observed H2S series per receptor over the window, and the published
-    # tijuana_dispersion forward model via sobol.predict_concentrations.
+    # so the calibration science is identical to the sensitivity analysis.
     df = sobol.load_window(sobol.DEFAULT_PARQUET, (config.window_start, config.window_end))
     drivers, met, hours = sobol.make_drivers_and_met(df)
     obs_mat = sobol.build_obs(df, hours, sobol.RECEPTOR_NAMES)  # (n_hours, n_receptors)
@@ -620,38 +625,35 @@ def mcmc_chain_results(
     sobol_indices = pd.DataFrame(sobol_aggregate["indices"])
     priors = mcmc.build_priors(sobol_indices=sobol_indices)
     context.log.info(
-        "MCMC: %d obs points, %d params; SMC %d chains × %d particles (window %s→%s)",
+        "MCMC chain %s (seed %d): %d obs points, %d params; single-chain SMC "
+        "× %d particles (window %s→%s)",
+        context.partition_key,
+        chain_seed,
         obs_flat.size,
         len(param_names),
-        config.n_chains,
         config.n_draws,
         config.window_start,
         config.window_end,
     )
 
     model = mcmc.build_model(obs_flat, forward_model_fn, priors, obs_sigma=config.obs_sigma)
+    # One chain per pod — chains=1. Cross-chain diagnostics happen in the aggregate.
     idata = mcmc.sample_posterior(
         model,
-        n_chains=config.n_chains,
+        n_chains=1,
         n_draws=config.n_draws,
-        n_tune=config.n_tune,
-        seed=config.seed,
+        seed=chain_seed,
     )
-
-    diag = mcmc.diagnostics(idata)
-    context.log.info(
-        "MCMC complete: max Rhat %.4f, converged=%s",
-        diag["_summary"]["max_rhat"],
-        diag["_summary"]["all_converged"],
-    )
+    context.log.info("MCMC chain %s complete", context.partition_key)
 
     return {
         "idata": idata.to_dict(),
-        "diagnostics": diag,
         "config": {
-            "n_chains": config.n_chains,
+            "chain": context.partition_key,
+            "chain_idx": chain_idx,
             "n_particles": config.n_draws,
-            "seed": config.seed,
+            "seed": chain_seed,
+            "base_seed": config.seed,
             "window": [config.window_start, config.window_end],
             "obs_sigma": config.obs_sigma,
             "n_obs": int(obs_flat.size),
@@ -660,43 +662,72 @@ def mcmc_chain_results(
 
 
 @dg.asset(
-    deps=[mcmc_chain_results],
     group_name="mcmc_posterior",
     op_tags=_AGGREGATOR_K8S_TAGS,
     io_manager_key="s3_io",
     required_resource_keys={"s3", "slack"},
+    ins={
+        "chains": dg.AssetIn(
+            "mcmc_chain_results",
+            partition_mapping=dg.AllPartitionMapping(),
+        ),
+    },
 )
 def mcmc_aggregate(
     context: AssetExecutionContext,
-    config: McmcConfig,
-    mcmc_chain_results: dict[str, Any],
+    chains: dict[str, dict[str, Any]],
 ) -> dg.MaterializeResult:
-    """Aggregate MCMC results and surface diagnostics.
+    """Combine the per-chain posteriors and compute cross-chain diagnostics.
 
-    Computes Rhat, effective sample size, and posterior predictive
-    performance on a held-out window (if available).
+    ``chains`` is ``{chain_NN: chain_value}`` for every partition. Each
+    chain ran single-chain SMC in its own pod; here we concatenate them
+    along the chain dimension so Rhat/ESS (which need ≥2 chains) are
+    meaningful. The combined posterior is the calibration result.
     """
+    import arviz as az
 
-    diag = mcmc_chain_results.get("diagnostics", {})
-    config_dict = mcmc_chain_results.get("config", {})
+    slack: SlackWebhookResource = context.resources.slack
 
-    context.log.info(f"MCMC aggregate: {len(diag)} parameters")
-    converged = diag.get("_summary", {}).get("all_converged", False)
-    max_rhat = diag.get("_summary", {}).get("max_rhat", float("inf"))
+    ordered = sorted(chains.items())  # deterministic chain order
+    idatas = [az.from_dict(posterior=v["idata"]["posterior"]) for _, v in ordered]
+    combined = az.concat(idatas, dim="chain")
+    cfg = ordered[0][1].get("config", {})  # identical across chains except seed
 
-    context.log.info(f"Convergence: {'✓' if converged else '✗'} (max Rhat: {max_rhat:.4f})")
+    diag = mcmc.diagnostics(combined)
+    summary = diag["_summary"]
+    converged = summary["all_converged"]
+    max_rhat = summary["max_rhat"]
+    n_chains = len(ordered)
+    context.log.info(
+        "MCMC aggregate: %d chains combined, max Rhat %.4f, converged=%s",
+        n_chains,
+        max_rhat,
+        converged,
+    )
+
+    slack.watch(
+        f":game_die: MCMC calibration complete (run {context.run_id[:8]})\n"
+        f"Chains: {n_chains} × {cfg.get('n_particles')} particles | "
+        f"window {cfg.get('window')}\n"
+        f"Converged: {converged} (max Rhat {max_rhat:.3f})",
+    )
 
     return dg.MaterializeResult(
-        value=mcmc_chain_results,
+        value={
+            "idata": combined.to_dict(),
+            "diagnostics": diag,
+            "config": {**cfg, "n_chains": n_chains},
+        },
         metadata={
-            "n_chains": config_dict.get("n_chains"),
-            "n_particles": config_dict.get("n_particles"),
+            "n_chains": n_chains,
+            "n_particles": cfg.get("n_particles"),
             "converged": converged,
             "max_rhat": float(max_rhat),
+            "window": str(cfg.get("window")),
             "diagnostics_summary": dg.MetadataValue.md(
                 f"**Convergence**: {'PASS' if converged else 'FAIL'}\n\n"
                 f"**Max Rhat**: {max_rhat:.4f} (threshold: 1.01)\n\n"
-                f"**Parameters**: {len([d for d in diag if d != '_summary'])}"
+                f"**Chains**: {n_chains} | **Params**: {summary['n_params']}"
             ),
         },
     )
@@ -713,11 +744,16 @@ def mcmc_aggregate(
     op_tags=_WORKER_K8S_TAGS,
     io_manager_key="s3_io",
     required_resource_keys={"s3"},
-    ins={"mcmc_chain_results": dg.AssetIn("mcmc_chain_results")},
+    ins={
+        "mcmc_chain_results": dg.AssetIn(
+            "mcmc_chain_results",
+            partition_mapping=dg.AllPartitionMapping(),
+        ),
+    },
 )
 def cv_fold_results(
     context: AssetExecutionContext,
-    mcmc_chain_results: dict[str, Any],
+    mcmc_chain_results: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     """Evaluate posterior predictive on a held-out window.
 

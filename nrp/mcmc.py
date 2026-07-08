@@ -236,42 +236,97 @@ def diagnostics(idata: az.InferenceData) -> dict[str, Any]:
     return diag
 
 
-def posterior_predictive_cv(
+def posterior_param_draws(
     idata: az.InferenceData,
-    forward_model_fn,
-    obs_holdout: dict[str, np.ndarray],
-) -> dict[str, Any]:
-    """Evaluate posterior predictive on held-out data.
+    param_names: list[str],
+    n_samples: int = 100,
+) -> np.ndarray:
+    """Thin the combined posterior to ``n_samples`` parameter vectors.
 
-    Args:
-        idata: posterior samples
-        forward_model_fn: callable(params_dict) -> dict with same keys as obs
-        obs_holdout: dict of held-out observations
-
-    Returns:
-        dict with RMSE per metric + overall mean RMSE
+    Returns an ``(n, len(param_names))`` array of draws in ``param_names``
+    order, evenly spaced across the stacked (chain, draw) samples.
     """
-    posterior = idata.posterior.to_dict()
-    param_samples = {}
+    post = idata.posterior.stack(sample=("chain", "draw"))
+    n_total = int(post.sizes["sample"])
+    k = min(n_samples, n_total)
+    idx = np.linspace(0, n_total - 1, k).astype(int)
+    return np.array(
+        [[float(post[p].isel(sample=i)) for p in param_names] for i in idx],
+        dtype="float64",
+    )
 
-    for param_name in forward_model_fn.__code__.co_varnames:
-        if param_name in posterior:
-            param_samples[param_name] = posterior[param_name].values
 
-    metrics = {}
-    first_param_key = next(iter(param_samples.keys()))
-    n_samples = len(param_samples[first_param_key])
-    for metric_name, obs_vec in obs_holdout.items():
-        preds = []
-        for i in range(n_samples):
-            params_i = {k: v[i] for k, v in param_samples.items()}
-            pred_dict = forward_model_fn(params_i)
-            preds.append(pred_dict.get(metric_name, np.nan))
+def bound_railing(
+    summary_df: pd.DataFrame,
+    param_ranges: dict[str, tuple[float, float]],
+    tol_frac: float = 0.02,
+) -> list[dict[str, Any]]:
+    """Flag parameters whose 94% HDI presses against a prior bound.
 
-        preds = np.array(preds)
-        rmse = np.sqrt(np.mean((preds - obs_vec) ** 2))
-        metrics[metric_name] = float(rmse)
+    A railing parameter means the data wants a value outside the box —
+    the signal that a range should be widened. ``summary_df`` is an
+    ``az.summary`` frame with a ``parameter`` column and ``hdi_3%`` /
+    ``hdi_97%`` columns.
+    """
+    flagged: list[dict[str, Any]] = []
+    for _, row in summary_df.iterrows():
+        p = row["parameter"]
+        if p not in param_ranges:
+            continue
+        low, high = param_ranges[p]
+        span = high - low
+        near_low = row["hdi_3%"] <= low + tol_frac * span
+        near_high = row["hdi_97%"] >= high - tol_frac * span
+        if near_low or near_high:
+            flagged.append(
+                {
+                    "parameter": p,
+                    "edge": "lower" if near_low else "upper",
+                    "mean": float(row["mean"]),
+                    "hdi_3%": float(row["hdi_3%"]),
+                    "hdi_97%": float(row["hdi_97%"]),
+                    "range": [low, high],
+                },
+            )
+    return flagged
 
-    metrics["_mean_rmse"] = float(np.mean(list(metrics.values())))
 
-    return metrics
+def predictive_skill(
+    param_draws: np.ndarray,
+    forward_predict: Callable[[np.ndarray], np.ndarray],
+    obs_mat: np.ndarray,
+    receptor_names: list[str],
+) -> list[dict[str, Any]]:
+    """Posterior-predictive skill per receptor.
+
+    ``forward_predict`` maps one parameter vector to an ``(n_hours,
+    n_receptors)`` prediction (e.g. ``sobol.predict_concentrations``
+    bound to the window's drivers/met). ``obs_mat`` is the matching
+    observed ``(n_hours, n_receptors)`` (NaN where missing). Returns, per
+    receptor with enough obs: posterior-predictive RMSE and correlation
+    of the mean, 94% interval coverage, and obs/pred means. Reused by
+    both the MCMC report and leave-one-event-out CV.
+    """
+    preds = np.array([forward_predict(row) for row in param_draws])  # (K, H, R)
+    out: list[dict[str, Any]] = []
+    for r_idx, name in enumerate(receptor_names):
+        valid = ~np.isnan(obs_mat[:, r_idx])
+        if valid.sum() < 5:
+            continue
+        o = obs_mat[valid, r_idx]
+        p = preds[:, valid, r_idx]
+        mean = p.mean(axis=0)
+        lo = np.percentile(p, 3, axis=0)
+        hi = np.percentile(p, 97, axis=0)
+        out.append(
+            {
+                "receptor": name,
+                "n_obs": int(valid.sum()),
+                "rmse": float(np.sqrt(np.mean((mean - o) ** 2))),
+                "corr": float(np.corrcoef(mean, o)[0, 1]) if mean.std() > 0 else 0.0,
+                "coverage_94": float(np.mean((o >= lo) & (o <= hi))),
+                "obs_mean": float(o.mean()),
+                "pred_mean": float(mean.mean()),
+            },
+        )
+    return out

@@ -71,12 +71,25 @@ sobol_partitions = dg.StaticPartitionsDefinition([f"chunk_{i:03d}" for i in rang
 
 mcmc_partitions = dg.StaticPartitionsDefinition([f"chain_{i:02d}" for i in range(8)])
 
-KNOWN_EVENTS = [
-    "2024_12_02_smugglers_gulch",
-    "2026_02_10_stewarts_drain",
-    "2026_03_14_stewarts_drain",
-    # ... add events as documented
-]
+# Leave-one-event-out CV registry. Each event maps to the calibration
+# `window` it lives in and the `holdout` sub-range to exclude when fitting
+# and then predict. Add events (with their windows) as documented; folds
+# whose window data isn't in the baked parquet skip gracefully.
+CV_EVENTS: dict[str, dict[str, tuple[str, str]]] = {
+    "2026_03_14_stewarts_drain": {
+        "window": ("2026-03-13", "2026-03-16"),
+        "holdout": ("2026-03-14", "2026-03-15"),
+    },
+    "2026_02_10_stewarts_drain": {
+        "window": ("2026-02-08", "2026-02-11"),
+        "holdout": ("2026-02-10", "2026-02-11"),
+    },
+    "2024_12_02_smugglers_gulch": {
+        "window": ("2024-12-01", "2024-12-04"),
+        "holdout": ("2024-12-02", "2024-12-03"),
+    },
+}
+KNOWN_EVENTS = list(CV_EVENTS)
 cv_fold_partitions = dg.StaticPartitionsDefinition(KNOWN_EVENTS)
 
 
@@ -559,21 +572,6 @@ def build_index(
 # MCMC workload
 # ============================================================
 
-# The 9 calibration metrics (3 fit types × 3 receptors) that observations and
-# forward-model output are keyed by. Used to shape placeholder scaffolding until
-# load_obs_for_window / the real forward model are wired in (see TODOs below).
-_CALIBRATION_METRICS = [
-    "rms__SAN YSIDRO",
-    "rms__NESTOR - BES",
-    "rms__IB CIVIC CTR",
-    "peak_ratio__SAN YSIDRO",
-    "peak_ratio__NESTOR - BES",
-    "peak_ratio__IB CIVIC CTR",
-    "corr__SAN YSIDRO",
-    "corr__NESTOR - BES",
-    "corr__IB CIVIC CTR",
-]
-
 
 @dg.asset(
     partitions_def=mcmc_partitions,
@@ -684,6 +682,8 @@ def mcmc_aggregate(
     along the chain dimension so Rhat/ESS (which need ≥2 chains) are
     meaningful. The combined posterior is the calibration result.
     """
+    import io
+
     import arviz as az
 
     slack: SlackWebhookResource = context.resources.slack
@@ -692,24 +692,138 @@ def mcmc_aggregate(
     idatas = [az.from_dict(posterior=v["idata"]["posterior"]) for _, v in ordered]
     combined = az.concat(idatas, dim="chain")
     cfg = ordered[0][1].get("config", {})  # identical across chains except seed
+    n_chains = len(ordered)
 
     diag = mcmc.diagnostics(combined)
     summary = diag["_summary"]
     converged = summary["all_converged"]
     max_rhat = summary["max_rhat"]
-    n_chains = len(ordered)
+
+    # ----- posterior summary + bound-railing -----
+    summ_df = (
+        az.summary(combined, hdi_prob=0.94).reset_index().rename(columns={"index": "parameter"})
+    )
+    railing = mcmc.bound_railing(summ_df, sobol.PARAM_RANGES)
+
+    # ----- posterior-predictive skill (best-effort; needs the forward model) -----
+    window = cfg.get("window", list(sobol.DEFAULT_WINDOW))
+    predictive: list[dict[str, Any]] = []
+    try:
+        df = sobol.load_window(sobol.DEFAULT_PARQUET, (window[0], window[1]))
+        drivers, met, _hours = sobol.make_drivers_and_met(df)
+        obs_mat = sobol.build_obs(df, _hours, sobol.RECEPTOR_NAMES)
+        param_names = list(sobol.PARAM_RANGES)
+        draws = mcmc.posterior_param_draws(combined, param_names, n_samples=100)
+        predictive = mcmc.predictive_skill(
+            draws,
+            lambda row: sobol.predict_concentrations(row, param_names, drivers, met),
+            obs_mat,
+            sobol.RECEPTOR_NAMES,
+        )
+    except Exception as exc:  # predictive is a bonus — never fail the report over it
+        context.log.warning("posterior-predictive skipped: %s", exc)
+
     context.log.info(
-        "MCMC aggregate: %d chains combined, max Rhat %.4f, converged=%s",
+        "MCMC aggregate: %d chains, max Rhat %.4f, converged=%s, %d railing param(s)",
         n_chains,
         max_rhat,
         converged,
+        len(railing),
     )
+
+    # ----- durable archive at runs/mcmc/<tag>/ -----
+    base_seed = cfg.get("base_seed", cfg.get("seed"))
+    n_particles = cfg.get("n_particles")
+    run_date = datetime.now(UTC).strftime("%Y-%m-%d")
+    tag = f"{window[0]}_{window[1]}_{n_chains}chains_{n_particles}p_seed{base_seed}_{run_date}"
+    bucket = os.getenv("DAGSTER_S3_BUCKET")
+    archived: dict[str, str] = {}
+    if bucket:
+        s3c = context.resources.s3.get_client()
+        prefix = f"runs/mcmc/{tag}"
+
+        samples = combined.posterior.to_dataframe().reset_index()
+        buf = io.BytesIO()
+        samples.to_parquet(buf, index=False)
+        s3c.put_object(
+            Bucket=bucket, Key=f"{prefix}/posterior_samples.parquet", Body=buf.getvalue()
+        )
+        archived["posterior_samples"] = f"{prefix}/posterior_samples.parquet"
+
+        s3c.put_object(
+            Bucket=bucket,
+            Key=f"{prefix}/posterior_summary.csv",
+            Body=summ_df.to_csv(index=False).encode(),
+        )
+        archived["posterior_summary"] = f"{prefix}/posterior_summary.csv"
+
+        analysis = {
+            "tag": tag,
+            "window": window,
+            "n_chains": n_chains,
+            "n_particles": n_particles,
+            "base_seed": base_seed,
+            "converged": converged,
+            "max_rhat": max_rhat,
+            "diagnostics": {k: v for k, v in diag.items() if k != "_summary"},
+            "bound_railing": railing,
+            "posterior_predictive": predictive,
+        }
+        s3c.put_object(
+            Bucket=bucket,
+            Key=f"{prefix}/diagnostics.json",
+            Body=_json.dumps(analysis, indent=2, default=str).encode(),
+        )
+        archived["diagnostics"] = f"{prefix}/diagnostics.json"
+
+        rail_md = (
+            "\n".join(f"- `{r['parameter']}` at {r['edge']} bound {r['range']}" for r in railing)
+            or "(none — all parameters interior)"
+        )
+        pred_md = (
+            pd.DataFrame(predictive).to_markdown(index=False)
+            if predictive
+            else "(posterior-predictive not computed)"
+        )
+        md = (
+            f"# MCMC calibration `{tag}`\n\n"
+            f"window **{window[0]} → {window[1]}** | {n_chains} chains × "
+            f"{n_particles} particles | base seed {base_seed}\n\n"
+            f"**Converged: {converged}** (max Rhat {max_rhat:.4f}, threshold 1.01)\n\n"
+            f"## Posterior (94% HDI)\n\n{summ_df.to_markdown(index=False)}\n\n"
+            f"## Parameters railing against bounds (widen these)\n\n{rail_md}\n\n"
+            f"## Posterior-predictive skill per receptor\n\n{pred_md}\n"
+        )
+        s3c.put_object(Bucket=bucket, Key=f"{prefix}/summary.md", Body=md.encode())
+        archived["summary"] = f"{prefix}/summary.md"
+
+        manifest = RunManifest(
+            kind="mcmc",
+            tag=tag,
+            window=list(window),
+            seed=base_seed,
+            git_sha=os.getenv("DAGSTER_GIT_SHA", "unknown"),
+            image_digest=os.getenv("DAGSTER_IMAGE_DIGEST", "unknown"),
+            status="complete",
+            created=_json.dumps(datetime.now(UTC), default=str),
+            headline={
+                "converged": converged,
+                "max_rhat": float(max_rhat),
+                "n_railing": len(railing),
+                "mean_coverage_94": (
+                    float(np.mean([p["coverage_94"] for p in predictive])) if predictive else None
+                ),
+            },
+            artifacts=archived,
+        )
+        write_manifest(s3c, bucket, manifest)
+    else:
+        context.log.info("DAGSTER_S3_BUCKET unset; skipping archive to runs/mcmc/%s/", tag)
 
     slack.watch(
         f":game_die: MCMC calibration complete (run {context.run_id[:8]})\n"
-        f"Chains: {n_chains} × {cfg.get('n_particles')} particles | "
-        f"window {cfg.get('window')}\n"
-        f"Converged: {converged} (max Rhat {max_rhat:.3f})",
+        f"Chains: {n_chains} × {n_particles} particles | window {window}\n"
+        f"Converged: {converged} (max Rhat {max_rhat:.3f}) | railing: {len(railing)}",
     )
 
     return dg.MaterializeResult(
@@ -719,15 +833,21 @@ def mcmc_aggregate(
             "config": {**cfg, "n_chains": n_chains},
         },
         metadata={
+            "tag": tag,
             "n_chains": n_chains,
-            "n_particles": cfg.get("n_particles"),
+            "n_particles": n_particles,
             "converged": converged,
             "max_rhat": float(max_rhat),
-            "window": str(cfg.get("window")),
-            "diagnostics_summary": dg.MetadataValue.md(
-                f"**Convergence**: {'PASS' if converged else 'FAIL'}\n\n"
-                f"**Max Rhat**: {max_rhat:.4f} (threshold: 1.01)\n\n"
-                f"**Chains**: {n_chains} | **Params**: {summary['n_params']}"
+            "window": str(window),
+            "railing_params": ", ".join(r["parameter"] for r in railing) or "(none)",
+            "posterior_summary": dg.MetadataValue.md(summ_df.to_markdown(index=False)),
+            "predictive_skill": dg.MetadataValue.md(
+                pd.DataFrame(predictive).to_markdown(index=False)
+                if predictive
+                else "(not computed)"
+            ),
+            "archived": dg.MetadataValue.md(
+                "\n".join(f"- `{k}`: `{v}`" for k, v in archived.items()) or "(no S3 archive)"
             ),
         },
     )
@@ -741,85 +861,196 @@ def mcmc_aggregate(
 @dg.asset(
     partitions_def=cv_fold_partitions,
     group_name="loo_cv",
-    op_tags=_WORKER_K8S_TAGS,
+    op_tags=_MCMC_K8S_TAGS,
     io_manager_key="s3_io",
     required_resource_keys={"s3"},
-    ins={
-        "mcmc_chain_results": dg.AssetIn(
-            "mcmc_chain_results",
-            partition_mapping=dg.AllPartitionMapping(),
-        ),
-    },
 )
 def cv_fold_results(
     context: AssetExecutionContext,
-    mcmc_chain_results: dict[str, dict[str, Any]],
+    config: McmcConfig,
 ) -> dict[str, Any]:
-    """Evaluate posterior predictive on a held-out window.
+    """Leave-one-event-out CV for this partition's event.
 
-    Each partition corresponds to one event/window to hold out.
-    Uses the posterior samples from mcmc_chain_results to compute
-    predictions on the held-out data.
-
-    TODO: This is scaffolding. Real implementation should:
-      - Fit MCMC on all windows EXCEPT this one
-      - Evaluate posterior predictive on the held-out window
-      - Return RMSE per metric + overall mean RMSE
+    Refits the emission parameters on the event's window with the event's
+    hours *excluded*, then predicts those held-out hours — the honest
+    out-of-sample test. Returns train (in-sample) and test (held-out)
+    posterior-predictive skill per receptor; ``cv_aggregate`` combines
+    them into the generalization report. Each fold is its own SMC fit
+    (one chain, isolated pod), reusing the exact calibration machinery.
     """
+    event = context.partition_key
+    ev = CV_EVENTS[event]
+    (ws, we), (hs, he) = ev["window"], ev["holdout"]
+    context.log.info("CV fold %s: window %s→%s, hold out %s→%s", event, ws, we, hs, he)
 
-    held_out_event = context.partition_key
-    context.log.info(f"Hold-out CV fold: {held_out_event}")
+    try:
+        df = sobol.load_window(sobol.DEFAULT_PARQUET, (ws, we))
+    except Exception as exc:  # missing window data → skip, don't fail the whole sweep
+        context.log.warning("fold %s skipped: %s", event, exc)
+        return {"event": event, "status": f"skipped: {exc}"}
 
-    # TODO: Load observations for held-out event
-    obs_holdout = {k: np.random.randn(100) for k in _CALIBRATION_METRICS}  # random ok: placeholder
+    drivers, met, hours = sobol.make_drivers_and_met(df)
+    obs_mat = sobol.build_obs(df, hours, sobol.RECEPTOR_NAMES)  # (n_hours, n_receptors)
+    holdout = (hours >= pd.Timestamp(hs)) & (hours < pd.Timestamp(he))
+    if holdout.sum() == 0 or (~holdout).sum() == 0:
+        return {"event": event, "status": "skipped: empty holdout/train split"}
 
-    # TODO: Wire forward_model_fn to actual dispersion model
-    def forward_model_fn(params):
-        return {k: np.random.randn(100) for k in obs_holdout}  # random ok: placeholder
+    param_names = list(sobol.PARAM_RANGES)
 
-    # TODO: Restore InferenceData from mcmc_chain_results
-    # idata = az.from_dict(mcmc_chain_results.get("idata", {}))
-    # Compute posterior predictive on held-out window
-    cv_metrics = mcmc.posterior_predictive_cv(
-        None,  # idata placeholder — requires wiring
-        forward_model_fn,
-        obs_holdout,
+    def fwd(row: np.ndarray) -> np.ndarray:
+        return sobol.predict_concentrations(row, param_names, drivers, met)
+
+    # --- fit on TRAIN (holdout hours masked out of the likelihood) ---
+    train_obs = obs_mat.copy()
+    train_obs[holdout, :] = np.nan
+    valid_train = ~np.isnan(train_obs)
+    if valid_train.sum() == 0:
+        return {"event": event, "status": "skipped: no training observations"}
+
+    def forward_train(params: dict[str, float]) -> np.ndarray:
+        row = np.array([params[p] for p in param_names], dtype=float)
+        return fwd(row)[valid_train]
+
+    priors = mcmc.build_priors(sobol_indices=None)
+    model = mcmc.build_model(
+        train_obs[valid_train], forward_train, priors, obs_sigma=config.obs_sigma
     )
+    idata = mcmc.sample_posterior(model, n_chains=1, n_draws=config.n_draws, seed=config.seed)
+
+    # --- predict: held-out (test) vs in-sample (train) ---
+    draws = mcmc.posterior_param_draws(idata, param_names, n_samples=100)
+    test_obs = np.where(holdout[:, None], obs_mat, np.nan)
+    train_only = np.where(holdout[:, None], np.nan, obs_mat)
+    test_skill = mcmc.predictive_skill(draws, fwd, test_obs, sobol.RECEPTOR_NAMES)
+    train_skill = mcmc.predictive_skill(draws, fwd, train_only, sobol.RECEPTOR_NAMES)
+    context.log.info("CV fold %s complete: %d receptors scored held-out", event, len(test_skill))
 
     return {
-        "held_out_event": held_out_event,
-        "cv_metrics": cv_metrics,
+        "event": event,
+        "status": "complete",
+        "window": [ws, we],
+        "holdout": [hs, he],
+        "n_particles": config.n_draws,
+        "seed": config.seed,
+        "train_skill": train_skill,
+        "test_skill": test_skill,
     }
 
 
 @dg.asset(
-    deps=[cv_fold_results],
     group_name="loo_cv",
     op_tags=_AGGREGATOR_K8S_TAGS,
     io_manager_key="s3_io",
     required_resource_keys={"s3", "slack"},
+    ins={
+        "folds": dg.AssetIn(
+            "cv_fold_results",
+            partition_mapping=dg.AllPartitionMapping(),
+        ),
+    },
 )
 def cv_aggregate(
-    context: AssetExecutionContext, cv_fold_results: dict[str, Any]
+    context: AssetExecutionContext,
+    folds: dict[str, dict[str, Any]],
 ) -> dg.MaterializeResult:
-    """Aggregate cross-validation results across all hold-out folds.
+    """Combine LOO-CV folds → out-of-sample skill + generalization report.
 
-    Computes mean RMSE and coverage metrics across folds.
+    Reports the honest test (held-out) predictive skill averaged over
+    folds, alongside the train (in-sample) skill so the generalization
+    gap is explicit. Writes a durable runs/cv/<tag>/ report + manifest.
     """
-    context.log.info("CV aggregate: collecting hold-out fold results...")
+    slack: SlackWebhookResource = context.resources.slack
 
-    # TODO: Aggregate cv_fold_results from all partitions
-    # For now, placeholder
-    all_cv_metrics = {}
-    mean_rmse = 0.0
+    def _mean(skill_lists: list[list[dict[str, Any]]], key: str) -> float | None:
+        vals = [s[key] for lst in skill_lists for s in lst]
+        return float(np.mean(vals)) if vals else None
+
+    complete = {k: v for k, v in folds.items() if v.get("status") == "complete"}
+    skipped = {k: v.get("status") for k, v in folds.items() if v.get("status") != "complete"}
+    rows: list[dict[str, Any]] = []
+    for event, v in sorted(complete.items()):
+        for s in v["test_skill"]:
+            rows.append({"event": event, "split": "test", **s})
+        for s in v["train_skill"]:
+            rows.append({"event": event, "split": "train", **s})
+    folds_df = pd.DataFrame(rows)
+
+    test_lists = [v["test_skill"] for v in complete.values()]
+    train_lists = [v["train_skill"] for v in complete.values()]
+    test_rmse, test_corr = _mean(test_lists, "rmse"), _mean(test_lists, "corr")
+    train_rmse, train_corr = _mean(train_lists, "rmse"), _mean(train_lists, "corr")
+    test_cover = _mean(test_lists, "coverage_94")
+    gen_gap = (
+        (train_corr - test_corr) if (train_corr is not None and test_corr is not None) else None
+    )
+    context.log.info(
+        "CV aggregate: %d complete, %d skipped | test RMSE=%s corr=%s | gen-gap=%s",
+        len(complete),
+        len(skipped),
+        test_rmse,
+        test_corr,
+        gen_gap,
+    )
+
+    run_date = datetime.now(UTC).strftime("%Y-%m-%d")
+    tag = f"loo_cv_{len(complete)}folds_{run_date}"
+    bucket = os.getenv("DAGSTER_S3_BUCKET")
+    archived: dict[str, str] = {}
+    if bucket and not folds_df.empty:
+        s3c = context.resources.s3.get_client()
+        prefix = f"runs/cv/{tag}"
+        s3c.put_object(
+            Bucket=bucket, Key=f"{prefix}/cv_folds.csv", Body=folds_df.to_csv(index=False).encode()
+        )
+        archived["cv_folds"] = f"{prefix}/cv_folds.csv"
+        md = (
+            f"# Leave-one-event-out CV `{tag}`\n\n"
+            f"folds complete: **{len(complete)}** | skipped: {len(skipped)}\n\n"
+            f"## Out-of-sample (held-out) skill\n\n"
+            f"- mean RMSE: **{test_rmse:.3f}** ppb\n"
+            f"- mean corr: **{test_corr:.3f}**\n"
+            f"- mean 94% coverage: **{test_cover:.3f}**\n\n"
+            f"## Generalization gap (train − test corr): "
+            f"**{gen_gap:.3f}**\n\n"
+            f"train mean RMSE {train_rmse:.3f} / corr {train_corr:.3f}\n\n"
+            f"## Per-fold, per-receptor\n\n{folds_df.to_markdown(index=False)}\n\n"
+            f"## Skipped folds\n\n"
+            + ("\n".join(f"- `{k}`: {s}" for k, s in skipped.items()) or "(none)")
+        )
+        s3c.put_object(Bucket=bucket, Key=f"{prefix}/summary.md", Body=md.encode())
+        archived["summary"] = f"{prefix}/summary.md"
+        manifest = RunManifest(
+            kind="cv",
+            tag=tag,
+            window=["", ""],
+            git_sha=os.getenv("DAGSTER_GIT_SHA", "unknown"),
+            image_digest=os.getenv("DAGSTER_IMAGE_DIGEST", "unknown"),
+            status="complete",
+            created=_json.dumps(datetime.now(UTC), default=str),
+            skill={"validation": train_corr, "test": test_corr},
+            headline={"n_folds": len(complete), "test_rmse": test_rmse, "gen_gap": gen_gap},
+            artifacts=archived,
+        )
+        write_manifest(s3c, bucket, manifest)
+
+    if test_corr is not None:
+        slack.watch(
+            f":test_tube: LOO-CV complete ({len(complete)} folds)\n"
+            f"Out-of-sample corr {test_corr:.3f}, RMSE {test_rmse:.3f} ppb | "
+            f"gen-gap {gen_gap:.3f}",
+        )
 
     return dg.MaterializeResult(
-        value={"cv_metrics_aggregate": all_cv_metrics},
+        value={"folds": rows, "skipped": skipped},
         metadata={
-            "n_folds": 0,  # TODO
-            "mean_rmse": float(mean_rmse),
+            "n_folds_complete": len(complete),
+            "n_folds_skipped": len(skipped),
+            "test_rmse": test_rmse if test_rmse is not None else float("nan"),
+            "test_corr": test_corr if test_corr is not None else float("nan"),
+            "test_coverage_94": test_cover if test_cover is not None else float("nan"),
+            "generalization_gap": gen_gap if gen_gap is not None else float("nan"),
             "cv_summary": dg.MetadataValue.md(
-                f"**Cross-validation RMSE**: {mean_rmse:.2f} ppb\n\n**Folds evaluated**: 0"  # TODO
+                folds_df.to_markdown(index=False) if not folds_df.empty else "(no complete folds)"
             ),
         },
     )

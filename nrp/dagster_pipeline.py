@@ -135,6 +135,12 @@ _MCMC_K8S_TAGS = {
     },
 }
 
+# NRP worker nodes are preemptible — long step pods (multi-hour SMC chains,
+# CV folds) get reaped mid-run. A step-level retry makes the step relaunch
+# on a fresh pod instead of failing the partition, so backfills self-heal
+# instead of needing manual re-submission. delay lets the scheduler settle.
+_PREEMPT_RETRY = dg.RetryPolicy(max_retries=5, delay=60)
+
 
 # ============================================================
 # Sobol sensitivity workload
@@ -187,6 +193,7 @@ class McmcConfig(dg.Config):
     partitions_def=sobol_partitions,
     group_name="sobol_sensitivity",
     op_tags=_WORKER_K8S_TAGS,
+    retry_policy=_PREEMPT_RETRY,
     io_manager_key="s3_io",
 )
 def sobol_chunk_results(
@@ -273,6 +280,7 @@ def sobol_chunk_results(
     group_name="sobol_sensitivity",
     op_tags=_AGGREGATOR_K8S_TAGS,
     pool="nrp_heavy",  # non-exempt (2 CPU/8Gi) — bound by the NRP 4-pod limit
+    retry_policy=_PREEMPT_RETRY,
     io_manager_key="s3_io",
     required_resource_keys={"slack"},
     # Self-driving: materialise once all 100 chunk partitions are present
@@ -349,6 +357,7 @@ def sobol_aggregate(
     group_name="sobol_sensitivity",
     op_tags=_AGGREGATOR_K8S_TAGS,
     pool="nrp_heavy",  # non-exempt (2 CPU/8Gi) — bound by the NRP 4-pod limit
+    retry_policy=_PREEMPT_RETRY,
     io_manager_key="s3_io",
     # required_resource_keys={"s3"},
     # Self-driving: fire as soon as sobol_aggregate is (re)materialised.
@@ -512,6 +521,7 @@ def sobol_post_analysis(
     group_name="reporting",
     op_tags=_AGGREGATOR_K8S_TAGS,
     pool="nrp_heavy",  # non-exempt (2 CPU/8Gi) — bound by the NRP 4-pod limit
+    retry_policy=_PREEMPT_RETRY,
     io_manager_key="s3_io",
     required_resource_keys={"s3"},
 )
@@ -581,6 +591,7 @@ def build_index(
     group_name="mcmc_posterior",
     op_tags=_MCMC_K8S_TAGS,
     pool="nrp_heavy",  # non-exempt (2 CPU/8Gi) — bound by the NRP 4-pod limit
+    retry_policy=_PREEMPT_RETRY,
     io_manager_key="s3_io",
     required_resource_keys={"s3"},
     ins={"sobol_aggregate": dg.AssetIn("sobol_aggregate")},
@@ -667,6 +678,7 @@ def mcmc_chain_results(
     group_name="mcmc_posterior",
     op_tags=_AGGREGATOR_K8S_TAGS,
     pool="nrp_heavy",  # non-exempt (2 CPU/8Gi) — bound by the NRP 4-pod limit
+    retry_policy=_PREEMPT_RETRY,
     io_manager_key="s3_io",
     required_resource_keys={"s3", "slack"},
     ins={
@@ -868,6 +880,7 @@ def mcmc_aggregate(
     group_name="loo_cv",
     op_tags=_MCMC_K8S_TAGS,
     pool="nrp_heavy",  # non-exempt (2 CPU/8Gi) — bound by the NRP 4-pod limit
+    retry_policy=_PREEMPT_RETRY,
     io_manager_key="s3_io",
     required_resource_keys={"s3"},
 )
@@ -947,6 +960,7 @@ def cv_fold_results(
     group_name="loo_cv",
     op_tags=_AGGREGATOR_K8S_TAGS,
     pool="nrp_heavy",  # non-exempt (2 CPU/8Gi) — bound by the NRP 4-pod limit
+    retry_policy=_PREEMPT_RETRY,
     io_manager_key="s3_io",
     required_resource_keys={"s3", "slack"},
     ins={

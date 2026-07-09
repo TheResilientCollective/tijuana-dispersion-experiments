@@ -142,6 +142,18 @@ _MCMC_K8S_TAGS = {
 _PREEMPT_RETRY = dg.RetryPolicy(max_retries=5, delay=60)
 
 
+def _archive_prefix(kind: str, tag: str) -> str:
+    """S3 key prefix for a durable per-run archive: ``<root>/<kind>/<tag>``.
+
+    The root defaults to ``runs`` and is overridable via the
+    ``S3_ARCHIVE_PREFIX`` env var, so where results are published is a
+    deployment parameter rather than hardcoded. Bucket + endpoint are
+    already env (``DAGSTER_S3_BUCKET`` / ``S3_ENDPOINT_URL``).
+    """
+    root = os.getenv("S3_ARCHIVE_PREFIX", "runs").strip("/")
+    return f"{root}/{kind}/{tag}"
+
+
 # ============================================================
 # Sobol sensitivity workload
 # ============================================================
@@ -416,14 +428,14 @@ def sobol_post_analysis(
     archived: dict[str, str] = {}
     if bucket:
         s3_client = s3.get_client()  # boto3 client
-        prefix = f"runs/sobol/{tag}"
+        prefix = _archive_prefix("sobol", tag)
         # 1) indices, full table
         buf_p = io.BytesIO()
         indices.to_parquet(buf_p, index=False)
         s3_client.put_object(
             Bucket=bucket, Key=f"{prefix}/sobol_indices.parquet", Body=buf_p.getvalue()
         )
-        archived["indices"] = f"runs/sobol/{tag}/sobol_indices.parquet"
+        archived["indices"] = f"{prefix}/sobol_indices.parquet"
         # 2) diagnostics + summaries, machine-readable
         analysis = {
             "tag": tag,
@@ -443,7 +455,7 @@ def sobol_post_analysis(
             Key=f"{prefix}/analysis.json",
             Body=_json.dumps(analysis, indent=2).encode(),
         )
-        archived["analysis"] = f"runs/sobol/{tag}/analysis.json"
+        archived["analysis"] = f"{prefix}/analysis.json"
         # 3) human-readable summary
         md = (
             f"# Sobol run `{tag}`\n\n"
@@ -466,7 +478,7 @@ def sobol_post_analysis(
             f"{drops or '(none)'}\n"
         )
         s3_client.put_object(Bucket=bucket, Key=f"{prefix}/summary.md", Body=md.encode())
-        archived["summary"] = f"runs/sobol/{tag}/summary.md"
+        archived["summary"] = f"{prefix}/summary.md"
         # 4) manifest (self-describing metadata + artifact pointers)
         manifest = RunManifest(
             kind="sobol",
@@ -757,7 +769,7 @@ def mcmc_aggregate(
     archived: dict[str, str] = {}
     if bucket:
         s3c = context.resources.s3.get_client()
-        prefix = f"runs/mcmc/{tag}"
+        prefix = _archive_prefix("mcmc", tag)
 
         samples = combined.posterior.to_dataframe().reset_index()
         buf = io.BytesIO()
@@ -1019,7 +1031,7 @@ def cv_aggregate(
     archived: dict[str, str] = {}
     if bucket and not folds_df.empty:
         s3c = context.resources.s3.get_client()
-        prefix = f"runs/cv/{tag}"
+        prefix = _archive_prefix("cv", tag)
         s3c.put_object(
             Bucket=bucket, Key=f"{prefix}/cv_folds.csv", Body=folds_df.to_csv(index=False).encode()
         )

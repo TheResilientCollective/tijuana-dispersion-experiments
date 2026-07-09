@@ -272,6 +272,7 @@ def sobol_chunk_results(
 @dg.asset(
     group_name="sobol_sensitivity",
     op_tags=_AGGREGATOR_K8S_TAGS,
+    pool="nrp_heavy",  # non-exempt (2 CPU/8Gi) — bound by the NRP 4-pod limit
     io_manager_key="s3_io",
     required_resource_keys={"slack"},
     # Self-driving: materialise once all 100 chunk partitions are present
@@ -347,6 +348,7 @@ def sobol_aggregate(
 @dg.asset(
     group_name="sobol_sensitivity",
     op_tags=_AGGREGATOR_K8S_TAGS,
+    pool="nrp_heavy",  # non-exempt (2 CPU/8Gi) — bound by the NRP 4-pod limit
     io_manager_key="s3_io",
     # required_resource_keys={"s3"},
     # Self-driving: fire as soon as sobol_aggregate is (re)materialised.
@@ -509,6 +511,7 @@ def sobol_post_analysis(
 @dg.asset(
     group_name="reporting",
     op_tags=_AGGREGATOR_K8S_TAGS,
+    pool="nrp_heavy",  # non-exempt (2 CPU/8Gi) — bound by the NRP 4-pod limit
     io_manager_key="s3_io",
     required_resource_keys={"s3"},
 )
@@ -577,6 +580,7 @@ def build_index(
     partitions_def=mcmc_partitions,
     group_name="mcmc_posterior",
     op_tags=_MCMC_K8S_TAGS,
+    pool="nrp_heavy",  # non-exempt (2 CPU/8Gi) — bound by the NRP 4-pod limit
     io_manager_key="s3_io",
     required_resource_keys={"s3"},
     ins={"sobol_aggregate": dg.AssetIn("sobol_aggregate")},
@@ -662,6 +666,7 @@ def mcmc_chain_results(
 @dg.asset(
     group_name="mcmc_posterior",
     op_tags=_AGGREGATOR_K8S_TAGS,
+    pool="nrp_heavy",  # non-exempt (2 CPU/8Gi) — bound by the NRP 4-pod limit
     io_manager_key="s3_io",
     required_resource_keys={"s3", "slack"},
     ins={
@@ -862,6 +867,7 @@ def mcmc_aggregate(
     partitions_def=cv_fold_partitions,
     group_name="loo_cv",
     op_tags=_MCMC_K8S_TAGS,
+    pool="nrp_heavy",  # non-exempt (2 CPU/8Gi) — bound by the NRP 4-pod limit
     io_manager_key="s3_io",
     required_resource_keys={"s3"},
 )
@@ -940,6 +946,7 @@ def cv_fold_results(
 @dg.asset(
     group_name="loo_cv",
     op_tags=_AGGREGATOR_K8S_TAGS,
+    pool="nrp_heavy",  # non-exempt (2 CPU/8Gi) — bound by the NRP 4-pod limit
     io_manager_key="s3_io",
     required_resource_keys={"s3", "slack"},
     ins={

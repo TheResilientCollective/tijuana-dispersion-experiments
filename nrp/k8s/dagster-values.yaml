@@ -153,7 +153,7 @@ dagster-user-deployments:
         - name: object-store-credentials
 
 # ============================================================
-# Run concurrency (modern top-level block; do NOT also set
+# Concurrency (modern top-level block; do NOT also set
 # maxConcurrentRuns/tagConcurrencyLimits under dagsterDaemon.runCoordinator).
 # ============================================================
 #
@@ -161,16 +161,23 @@ dagster-user-deployments:
 # MORE than 1 CPU / 2GB. Pods at exactly 1 CPU / 2Gi are exempt, so the Sobol
 # chunk workers (limits 1 CPU / 2Gi) fan out freely under maxConcurrentRuns.
 # The heavy workloads — MCMC chains, CV folds, and all aggregators (2 CPU /
-# 8Gi) — are NOT exempt. Because the NRP limit is on TOTAL non-exempt pods
-# (across MCMC *and* CV), a single shared tag `nrp_pool=heavy` capped at 4 is
-# correct; per-pipeline limits would let mcmc(4)+cv(4)=8 slip through.
-# Runs carry the tag via the backfill/launch `tags` field (see
-# nrp/scripts and the submit helpers).
+# 8Gi) — are NOT exempt.
+#
+# Enforced with OP-LEVEL POOLS rather than run tags: the heavy assets declare
+# `pool="nrp_heavy"` in code (nrp/dagster_pipeline.py), so the limit travels
+# with the asset automatically for every launch path (backfill, automation,
+# UI) — no submission-time tagging needed. granularity=op limits concurrent
+# *step pods*; defaultLimit=4 caps the nrp_heavy pool at the NRP ceiling. A
+# single shared pool (not per-pipeline) is required because NRP's cap is on
+# TOTAL non-exempt pods across MCMC + CV. Unpooled ops (Sobol chunks, exempt)
+# are unbounded here, governed only by maxConcurrentRuns.
 concurrency:
   enabled: true
+  pools:
+    granularity: "op"
+    defaultLimit: 4
+    # Allow plenty of runs to queue while blocked on a pool slot (8 MCMC
+    # chains + CV folds contend for 4 slots).
+    opGranularityRunBuffer: 25
   runs:
     maxConcurrentRuns: 25
-    tagConcurrencyLimits:
-      - key: "nrp_pool"
-        value: "heavy"
-        limit: 4

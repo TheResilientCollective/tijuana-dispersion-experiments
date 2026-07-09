@@ -40,37 +40,9 @@ dagsterDaemon:
     limits:
       cpu: 500m
       memory: 512Mi
-  # Bound backfill fan-out. The chart default is unlimited
-  # (maxConcurrentRuns: -1), which launches all 100 Sobol chunk runs at
-  # once. That storm caused the two infra failures seen on 2026-07-07:
-  #   1. Postgres connection exhaustion — each run pod AND its step pod
-  #      open a connection; ~200 at once blew past PG's default
-  #      max_connections (100) → "too many retries for DB connection".
-  #   2. Image-pull thundering-herd against the GitLab registry →
-  #      transient ErrImagePull that exceeded step-job deadlines.
-  # Capping at 25 keeps peak connections (~25 run + ~25 step + overhead)
-  # comfortably under 100 and pulls the image in waves. 100 chunks then
-  # run ~4 waves; wall-clock is barely affected because waves overlap
-  # (a new run dequeues the moment one finishes).
-  #
-  # NRP also caps a user at 4 concurrent "resource-using" pods — any pod
-  # requesting more than 1 CPU / 2GB. Pods requesting exactly 1 CPU / 2GB
-  # are exempt (so the Sobol chunk workers, limits 1 CPU / 2Gi, fan out
-  # freely). The MCMC chain pods are 8Gi / 2 CPU → NOT exempt → only 4 may
-  # run at once. The tagConcurrencyLimits below throttle any run tagged
-  # `calibration/workload=mcmc` to 4, so an 8-chain backfill runs 4-at-a-
-  # time instead of losing the overflow to eviction. Submit MCMC backfills
-  # with that run tag (scripts/submit_mcmc or the GraphQL `tags` field).
-  runCoordinator:
-    enabled: true
-    type: QueuedRunCoordinator
-    config:
-      queuedRunCoordinator:
-        maxConcurrentRuns: 25
-        tagConcurrencyLimits:
-          - key: "calibration/workload"
-            value: "mcmc"
-            limit: 4
+  # Run concurrency is configured in the top-level `concurrency:` block
+  # (see bottom of file). The chart forbids also setting maxConcurrentRuns /
+  # tagConcurrencyLimits here under runCoordinator, so we leave this default.
 
 dagsterWebserver:
   replicaCount: 1
@@ -179,3 +151,26 @@ dagster-user-deployments:
         enabled: true
       envSecrets:
         - name: object-store-credentials
+
+# ============================================================
+# Run concurrency (modern top-level block; do NOT also set
+# maxConcurrentRuns/tagConcurrencyLimits under dagsterDaemon.runCoordinator).
+# ============================================================
+#
+# NRP caps a user at 4 concurrent "resource-using" pods — any pod requesting
+# MORE than 1 CPU / 2GB. Pods at exactly 1 CPU / 2Gi are exempt, so the Sobol
+# chunk workers (limits 1 CPU / 2Gi) fan out freely under maxConcurrentRuns.
+# The heavy workloads — MCMC chains, CV folds, and all aggregators (2 CPU /
+# 8Gi) — are NOT exempt. Because the NRP limit is on TOTAL non-exempt pods
+# (across MCMC *and* CV), a single shared tag `nrp_pool=heavy` capped at 4 is
+# correct; per-pipeline limits would let mcmc(4)+cv(4)=8 slip through.
+# Runs carry the tag via the backfill/launch `tags` field (see
+# nrp/scripts and the submit helpers).
+concurrency:
+  enabled: true
+  runs:
+    maxConcurrentRuns: 25
+    tagConcurrencyLimits:
+      - key: "nrp_pool"
+        value: "heavy"
+        limit: 4

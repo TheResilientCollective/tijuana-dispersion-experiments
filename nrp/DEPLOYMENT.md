@@ -363,6 +363,16 @@ status and archive tag — copy the tags into `fetch_sobol_results.py
     ≤4**, or make the pods exempt (request=limit 1 CPU / 2Gi) and shrink
     the per-chain particle count so a single SMC chain fits 2Gi.
   - The exemption keys off the pod's *request/limit*, not observed use.
+  - **Enforcement**: the instance `concurrency:` block (in
+    `dagster-values.yaml`) sets `runs.maxConcurrentRuns: 25` and a
+    `tagConcurrencyLimits` entry capping runs tagged `nrp_pool=heavy` at
+    4. A **single shared** `nrp_pool=heavy` tag (not per-pipeline) is
+    required because the NRP cap is on *total* non-exempt pods across
+    MCMC *and* CV — per-pipeline limits (`mcmc:4`+`cv:4`) would allow 8.
+    Heavy submissions (MCMC-chain / CV-fold backfills, aggregate
+    launches) must carry `--tag nrp_pool=heavy` (GraphQL `tags` /
+    backfill `tags` field). Sobol chunks are exempt → untagged, bounded
+    only by `maxConcurrentRuns`. Takes effect on `helm upgrade`.
 - **Code-location readiness probe** (seen 2026-07-07): the chart's
   default readiness probe runs `dagster api grpc-health-check -p 3030`
   with a 10s timeout. Under the 500m CPU limit the CLI startup exceeds

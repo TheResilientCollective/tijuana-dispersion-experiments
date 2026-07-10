@@ -811,7 +811,17 @@ def mcmc_aggregate(
     base_seed = cfg.get("base_seed", cfg.get("seed"))
     n_particles = cfg.get("n_particles")
     run_date = datetime.now(UTC).strftime("%Y-%m-%d")
-    tag = f"{window[0]}_{window[1]}_{n_chains}chains_{n_particles}p_seed{base_seed}_{run_date}"
+    # Treatment marker so baseline vs mixing-height reports don't collide on
+    # the same day (same window/chains/particles/seed).
+    variant = ""
+    if cfg.get("mixing_height"):
+        variant += "_mhlid"
+    if cfg.get("fit_obs_sigma"):
+        variant += "_fitsig"
+    tag = (
+        f"{window[0]}_{window[1]}_{n_chains}chains_{n_particles}p"
+        f"_seed{base_seed}{variant}_{run_date}"
+    )
     bucket = os.getenv("DAGSTER_S3_BUCKET")
     archived: dict[str, str] = {}
     if bucket:

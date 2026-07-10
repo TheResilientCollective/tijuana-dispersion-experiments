@@ -1,0 +1,43 @@
+# NRP-preferred Postgres for Dagster: Zalando Postgres Operator.
+# https://nrp.ai/documentation/userdocs/running/postgres/
+#
+# Replaces the Dagster Helm chart's bundled Bitnami subchart (postgres:14.6
+# StatefulSet on rook-ceph-block) with an operator-managed cluster on Linstor
+# (NRP's preferred storage). 2 instances = primary + 1 streaming replica for
+# failover. The operator creates:
+#   - Service `dagster-pg`        (primary, read-write)   <- Dagster connects here
+#   - Service `dagster-pg-repl`   (replicas, read-only)
+#   - Secret  `dagster.dagster-pg.credentials.postgresql.acid.zalan.do`
+#                                 (keys: username, password)
+#
+# Cluster name starts with teamId ("dagster") to satisfy the operator's
+# team-prefix rule. resources are set explicitly for NRP's Gatekeeper policy.
+#
+#   kubectl apply -f nrp/k8s/postgres-zalando.yaml
+#   kubectl get postgresql -n ucsd-center4health   # STATUS -> Running
+apiVersion: acid.zalan.do/v1
+kind: postgresql
+metadata:
+  name: dagster-pg
+  namespace: ucsd-center4health
+spec:
+  teamId: dagster
+  numberOfInstances: 2
+  postgresql:
+    version: "14"
+  volume:
+    size: 8Gi
+    storageClass: linstor-igrok
+  users:
+    dagster:
+      - superuser
+      - createdb
+  databases:
+    dagster: dagster
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi

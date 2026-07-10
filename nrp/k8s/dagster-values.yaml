@@ -14,9 +14,12 @@
 # paths against `helm show values dagster/dagster` for that version.
 
 global:
-  # The Bitnami subchart auto-creates secret `dagster-postgresql`;
-  # point Dagster at the same one so passwords stay in sync.
-  postgresqlSecretName: dagster-postgresql  # pragma: allowlist secret  (secret *name*, not a value)
+  # Postgres is now the external Zalando-operator cluster (nrp/k8s/
+  # postgres-zalando.yaml), NOT the chart's bundled subchart. Dagster reads
+  # the password from this secret's `postgresql-password` key — a bridge
+  # secret copied from Zalando's generated `dagster.dagster-pg.credentials...`
+  # secret (whose key is `password`). See DEPLOYMENT.md §Postgres.
+  postgresqlSecretName: dagster-pg-cred  # pragma: allowlist secret  (secret *name*, not a value)
 
 imagePullSecrets:
   - name: gitlab-registry-cred
@@ -72,40 +75,20 @@ runLauncher:
       envSecrets:
         - name: object-store-credentials
 
-# Built-in Postgres (managed by the Dagster Helm chart).
-# This DB holds all run history, event logs, and schedule/sensor state.
-# It MUST be on a persistent volume or every pod restart wipes the run list.
+# EXTERNAL Postgres — the Zalando-operator cluster `dagster-pg`
+# (nrp/k8s/postgres-zalando.yaml), NRP's preferred approach. The chart's
+# bundled Bitnami subchart is DISABLED; Dagster connects to the operator's
+# primary Service `dagster-pg:5432` and reads the password from the
+# `dagster-pg-cred` secret (global.postgresqlSecretName above).
+#
+# Holds run history, event logs, schedule/sensor state — durable on Linstor,
+# 2 instances (primary + replica) for failover, managed by the operator.
 generatePostgresqlPasswordSecret: false
 postgresql:
-  enabled: true
+  enabled: false
+  postgresqlHost: dagster-pg
   postgresqlUsername: dagster
   postgresqlDatabase: dagster
-  # Persist the data dir (/bitnami/postgresql) on a network-backed volume.
-  # Pinned explicitly so it can never silently regress to an emptyDir if a
-  # chart-default changes — losing run history is the failure this prevents.
-  #
-  # storageClass is intentionally LEFT UNSET so it resolves to the NRP
-  # cluster default `rook-ceph-block` (Ceph RBD — network storage that
-  # survives the postgres pod rescheduling across NRP nodes; a node-local
-  # class such as `local-storage` would strand the data on one node).
-  # Do NOT add `storageClass:` here on an existing release: a StatefulSet's
-  # volumeClaimTemplates are immutable, so changing it makes `helm upgrade`
-  # fail. To switch classes you must `kubectl delete statefulset
-  # dagster-postgresql --cascade=orphan` first (keeps the pod + PVC), then
-  # upgrade. The current bound PVC `data-dagster-postgresql-0` is already on
-  # rook-ceph-block, so the values below render an identical template.
-  persistence:
-    enabled: true
-    size: 8Gi
-    accessModes:
-      - ReadWriteOnce
-  resources:
-    requests:
-      cpu: 100m
-      memory: 256Mi
-    limits:
-      cpu: 500m
-      memory: 512Mi
   service:
     port: 5432
 

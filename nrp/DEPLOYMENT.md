@@ -386,6 +386,42 @@ status and archive tag — copy the tags into `fetch_sobol_results.py
   `0/1 Running`, and `kubectl describe` shows repeated
   `Readiness probe failed: ... grpc-health-check ... timed out`.
 
+## Postgres — Zalando operator (NRP-preferred, replaces the Bitnami subchart)
+
+Per https://nrp.ai/documentation/userdocs/running/postgres/ the DB is an
+**external Zalando-operator cluster** (`acid.zalan.do/v1`), not the chart's
+bundled subchart. Manifest: **`nrp/k8s/postgres-zalando.yaml`** (2 instances,
+Linstor `linstor-igrok`, 8Gi, user+db `dagster`). The chart is set to
+`postgresql.enabled: false` + `postgresqlHost: dagster-pg`, and
+`global.postgresqlSecretName: dagster-pg-cred`.
+
+**Cutover (run as single-line commands — no `\` continuations):**
+
+```bash
+# 1. create the cluster
+kubectl apply -f nrp/k8s/postgres-zalando.yaml
+# 2. wait until Running (operator provisions 2 pods + the credentials secret)
+kubectl get postgresql dagster-pg -n ucsd-center4health -w   # STATUS -> Running, then Ctrl-C
+# 3. bridge the password into the key the chart expects (postgresql-password)
+PW=$(kubectl get secret dagster.dagster-pg.credentials.postgresql.acid.zalan.do -n ucsd-center4health -o jsonpath='{.data.password}' | base64 -d)
+kubectl create secret generic dagster-pg-cred -n ucsd-center4health --from-literal=postgresql-password="$PW"
+# 4. point Dagster at it (starts fresh — Dagster recreates its schema)
+helm upgrade dagster dagster/dagster -n ucsd-center4health --version 1.13.5 -f nrp/k8s/dagster-values.yaml --take-ownership
+# 5. verify: daemon/webserver Running, code location LOADED
+kubectl get pods -n ucsd-center4health
+# 6. once confirmed healthy, remove the old bundled DB
+kubectl delete statefulset dagster-postgresql -n ucsd-center4health
+kubectl delete pvc data-dagster-postgresql-0 -n ucsd-center4health
+```
+
+Notes:
+- Zalando's secret key is `password`; the Dagster chart wants
+  `postgresql-password` — hence the bridge secret in step 3. If the operator
+  ever rotates the password, re-run steps 3–4.
+- Run history does NOT carry over (fresh start). All calibration *results*
+  live in S3 (`runs/…` + `dagster/runs/…`), so nothing scientific is lost.
+- Health: `kubectl get postgresql -n ucsd-center4health`.
+
 ## 8. Teardown
 
 ```bash

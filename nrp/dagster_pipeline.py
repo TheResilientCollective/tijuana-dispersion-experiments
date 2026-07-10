@@ -199,6 +199,14 @@ class McmcConfig(dg.Config):
     window_start: str = sobol.DEFAULT_WINDOW[0]
     window_end: str = sobol.DEFAULT_WINDOW[1]
     obs_sigma: float = 10.0
+    # Mixing-height experiment (docs/mixing_height_experiment.md). Both
+    # default off => 11-param, fixed-sigma baseline (unchanged). Enable for
+    # the treatment run: fit a nocturnal mixing-height lid and/or per-receptor
+    # observation noise.
+    mixing_height: bool = False
+    mixing_height_day_m: float = 1500.0
+    fit_obs_sigma: bool = False
+    sigma_prior_scale: float = 30.0
 
 
 @dg.asset(
@@ -643,25 +651,54 @@ def mcmc_chain_results(
     def forward_model_fn(params: dict[str, float]) -> np.ndarray:
         """Concrete param dict → predicted concentrations at the valid obs points."""
         row = np.array([params[n] for n in param_names], dtype=float)
-        pred = sobol.predict_concentrations(row, param_names, drivers, met)
+        # mixing_height_night_m is present only in the treatment param set.
+        mh = params.get("mixing_height_night_m")
+        pred = sobol.predict_concentrations(
+            row,
+            param_names,
+            drivers,
+            met,
+            mixing_height_night_m=mh,
+            mixing_height_day_m=config.mixing_height_day_m,
+        )
         return pred[valid]
 
     # Sobol-informed priors from THIS study's ST indices (not a hardcoded table).
+    # Treatment (docs/mixing_height_experiment.md) optionally adds the lid param
+    # and/or per-receptor fittable observation noise; baseline leaves both off.
     sobol_indices = pd.DataFrame(sobol_aggregate["indices"])
-    priors = mcmc.build_priors(sobol_indices=sobol_indices)
+    priors = mcmc.build_priors(
+        sobol_indices=sobol_indices,
+        include_mixing_height=config.mixing_height,
+    )
     context.log.info(
-        "MCMC chain %s (seed %d): %d obs points, %d params; single-chain SMC "
-        "× %d particles (window %s→%s)",
+        "MCMC chain %s (seed %d): %d obs points, %d fwd params; SMC × %d particles"
+        " | mixing_height=%s fit_obs_sigma=%s (window %s→%s)",
         context.partition_key,
         chain_seed,
         obs_flat.size,
-        len(param_names),
+        len(priors),
         config.n_draws,
+        config.mixing_height,
+        config.fit_obs_sigma,
         config.window_start,
         config.window_end,
     )
 
-    model = mcmc.build_model(obs_flat, forward_model_fn, priors, obs_sigma=config.obs_sigma)
+    if config.fit_obs_sigma:
+        # Map each valid obs point to its receptor column for per-receptor σ.
+        rec_full = np.broadcast_to(np.arange(len(sobol.RECEPTOR_NAMES)), obs_mat.shape)
+        obs_receptor_idx = rec_full[valid]
+        model = mcmc.build_model(
+            obs_flat,
+            forward_model_fn,
+            priors,
+            obs_receptor_idx=obs_receptor_idx,
+            n_receptors=len(sobol.RECEPTOR_NAMES),
+            sigma_prior_scale=config.sigma_prior_scale,
+        )
+    else:
+        model = mcmc.build_model(obs_flat, forward_model_fn, priors, obs_sigma=config.obs_sigma)
     # One chain per pod — chains=1. Cross-chain diagnostics happen in the aggregate.
     idata = mcmc.sample_posterior(
         model,
@@ -682,6 +719,8 @@ def mcmc_chain_results(
             "window": [config.window_start, config.window_end],
             "obs_sigma": config.obs_sigma,
             "n_obs": int(obs_flat.size),
+            "mixing_height": config.mixing_height,
+            "fit_obs_sigma": config.fit_obs_sigma,
         },
     }
 
@@ -742,13 +781,21 @@ def mcmc_aggregate(
         drivers, met, _hours = sobol.make_drivers_and_met(df)
         obs_mat = sobol.build_obs(df, _hours, sobol.RECEPTOR_NAMES)
         param_names = list(sobol.PARAM_RANGES)
-        draws = mcmc.posterior_param_draws(combined, param_names, n_samples=100)
-        predictive = mcmc.predictive_skill(
-            draws,
-            lambda row: sobol.predict_concentrations(row, param_names, drivers, met),
-            obs_mat,
-            sobol.RECEPTOR_NAMES,
-        )
+        # In the mixing-height treatment the posterior also carries
+        # mixing_height_night_m — draw it too and feed it to the lidded plume,
+        # else the predictive would ignore the very effect we're testing.
+        treat_mh = bool(cfg.get("mixing_height", False))
+        draw_names = [*param_names, "mixing_height_night_m"] if treat_mh else param_names
+        n_fwd = len(param_names)
+        draws = mcmc.posterior_param_draws(combined, draw_names, n_samples=100)
+
+        def _fwd(vec: np.ndarray) -> np.ndarray:
+            mh = float(vec[n_fwd]) if treat_mh else None
+            return sobol.predict_concentrations(
+                vec[:n_fwd], param_names, drivers, met, mixing_height_night_m=mh
+            )
+
+        predictive = mcmc.predictive_skill(draws, _fwd, obs_mat, sobol.RECEPTOR_NAMES)
     except Exception as exc:  # predictive is a bonus — never fail the report over it
         context.log.warning("posterior-predictive skipped: %s", exc)
 

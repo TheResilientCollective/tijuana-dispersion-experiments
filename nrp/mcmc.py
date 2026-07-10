@@ -54,6 +54,8 @@ class PriorSpec:
 
 def build_priors(
     sobol_indices: pd.DataFrame | None = None,
+    include_mixing_height: bool = False,
+    mixing_height_range: tuple[float, float] = (50.0, 500.0),
 ) -> dict[str, PriorSpec]:
     """Build prior specs, Sobol-informed when indices are supplied.
 
@@ -61,6 +63,11 @@ def build_priors(
     the range midpoint; low-ST params get a wide Uniform over the
     feasible range. Parameter order follows :data:`PARAM_RANGES`. When
     ``sobol_indices`` is None every parameter falls back to Uniform.
+
+    ``include_mixing_height`` appends a Uniform ``mixing_height_night_m``
+    prior over ``mixing_height_range`` (m) for the mixing-height treatment
+    (see docs/mixing_height_experiment.md). Off by default (11-param
+    baseline).
     """
     st_by_param = sobol_st_by_param(sobol_indices)
     priors: dict[str, PriorSpec] = {}
@@ -88,6 +95,15 @@ def build_priors(
                 high=high,
             )
 
+    if include_mixing_height:
+        lo, hi = mixing_height_range
+        priors["mixing_height_night_m"] = PriorSpec(
+            name="mixing_height_night_m",
+            dist_type="uniform",
+            low=lo,
+            high=hi,
+        )
+
     return priors
 
 
@@ -96,23 +112,39 @@ def _gaussian_loglike(
     forward_model_fn: Callable[[dict[str, float]], np.ndarray],
     param_order: list[str],
     obs_sigma: float,
+    obs_receptor_idx: np.ndarray | None = None,
+    n_sigma: int = 0,
 ) -> Callable[[np.ndarray], float]:
     """Build a scalar Gaussian log-likelihood over a concrete param vector.
 
-    The returned closure maps a plain float vector (parameter values in
-    ``param_order``) to ``log N(obs | forward_model(params), obs_sigma)``.
-    It never touches PyTensor — it is the black box the Op wraps.
+    The returned closure maps a plain float vector to
+    ``log N(obs | forward_model(params), σ)``. It never touches PyTensor —
+    it is the black box the Op wraps.
+
+    ``theta`` is ``[forward params (len param_order), σ_0..σ_{n_sigma-1}]``.
+    With ``n_sigma == 0`` σ is the fixed scalar ``obs_sigma`` (baseline).
+    With ``n_sigma > 0`` the trailing entries are per-receptor σ (fittable)
+    and ``obs_receptor_idx`` maps each obs point to its receptor.
     """
     obs_flat = np.asarray(obs_flat, dtype="float64")
-    norm_const = obs_flat.size * float(np.log(obs_sigma * np.sqrt(2.0 * np.pi)))
+    n_fwd = len(param_order)
+    idx = None if obs_receptor_idx is None else np.asarray(obs_receptor_idx, dtype="int64")
 
     def loglike(theta: np.ndarray) -> float:
-        params = dict(zip(param_order, np.asarray(theta, dtype="float64"), strict=True))
+        theta = np.asarray(theta, dtype="float64")
+        params = dict(zip(param_order, theta[:n_fwd], strict=True))
         pred = np.asarray(forward_model_fn(params), dtype="float64")
         if pred.shape != obs_flat.shape or not np.all(np.isfinite(pred)):
             return -np.inf
+        if n_sigma > 0:
+            sig_vec = theta[n_fwd : n_fwd + n_sigma]
+            if np.any(sig_vec <= 0.0):
+                return -np.inf
+            sig = sig_vec[idx]  # per-obs σ
+        else:
+            sig = obs_sigma
         resid = obs_flat - pred
-        return float(-0.5 * np.sum((resid / obs_sigma) ** 2) - norm_const)
+        return float(-0.5 * np.sum((resid / sig) ** 2) - np.sum(np.log(sig * np.sqrt(2.0 * np.pi))))
 
     return loglike
 
@@ -143,23 +175,42 @@ def build_model(
     forward_model_fn: Callable[[dict[str, float]], np.ndarray],
     priors: dict[str, PriorSpec],
     obs_sigma: float = 10.0,
+    obs_receptor_idx: np.ndarray | None = None,
+    n_receptors: int = 0,
+    sigma_prior_scale: float | None = None,
 ) -> pm.Model:
     """Construct a PyMC model with a black-box (SMC-ready) likelihood.
 
     Args:
         obs_flat: 1D array of observed concentrations (valid entries only).
         forward_model_fn: callable(params_dict) -> 1D array aligned to
-            ``obs_flat`` (same length/order). Runs the real dispersion model.
-        priors: one PriorSpec per parameter; iteration order fixes the
-            parameter vector order handed to ``forward_model_fn``.
-        obs_sigma: observation noise std (ppb).
+            ``obs_flat``. Runs the real dispersion model.
+        priors: one PriorSpec per forward parameter; iteration order fixes
+            the parameter vector order handed to ``forward_model_fn``.
+        obs_sigma: fixed observation noise std (ppb) — used when σ is NOT
+            fitted.
+        obs_receptor_idx / n_receptors / sigma_prior_scale: enable
+            **fittable per-receptor σ**. When all are set, add ``n_receptors``
+            HalfNormal(σ=sigma_prior_scale) noise parameters and let the
+            likelihood use per-receptor σ (obs_receptor_idx maps each obs
+            point to its receptor). Leave unset for the fixed-σ baseline.
 
     Returns:
         PyMC Model ready for ``sample_posterior`` (SMC).
     """
     param_order = list(priors)
+    fittable_sigma = (
+        sigma_prior_scale is not None and obs_receptor_idx is not None and n_receptors > 0
+    )
     loglike_op = _LogLikeOp(
-        _gaussian_loglike(obs_flat, forward_model_fn, param_order, obs_sigma),
+        _gaussian_loglike(
+            obs_flat,
+            forward_model_fn,
+            param_order,
+            obs_sigma,
+            obs_receptor_idx=obs_receptor_idx if fittable_sigma else None,
+            n_sigma=n_receptors if fittable_sigma else 0,
+        ),
     )
 
     with pm.Model() as model:
@@ -173,6 +224,9 @@ def build_model(
                 )
             else:
                 rvs.append(pm.Uniform(name, lower=spec.low, upper=spec.high))
+        if fittable_sigma:
+            for r in range(n_receptors):
+                rvs.append(pm.HalfNormal(f"obs_sigma_{r}", sigma=sigma_prior_scale))
         theta = pt.stack(rvs)
         pm.Potential("likelihood", loglike_op(theta))
 

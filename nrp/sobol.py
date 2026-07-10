@@ -271,6 +271,9 @@ def predict_concentrations(
     param_names: list[str],
     drivers: list[EmissionDrivers],
     met: list[MetSpec],
+    *,
+    mixing_height_night_m: float | None = None,
+    mixing_height_day_m: float = 1500.0,
 ) -> np.ndarray:
     """Run the ``tijuana_dispersion`` forward model for one parameter vector.
 
@@ -280,6 +283,12 @@ def predict_concentrations(
     (:func:`evaluate_sample`) and the MCMC likelihood, so the science is
     identical across workloads. The service import is lazy (deferred
     ``service`` extra).
+
+    Mixing-height experiment (mixing_height_experiment.md): when
+    ``mixing_height_night_m`` is set, each hour's MetSpec gets a lid at that
+    height on nights (``is_night``) and ``mixing_height_day_m`` on days, so
+    the plume reflects off a nocturnal boundary layer. ``None`` (default)
+    keeps the original unbounded plume — the baseline path is untouched.
     """
     from tijuana_dispersion import (
         EmissionParameters,
@@ -309,6 +318,18 @@ def predict_concentrations(
         baselines_g_s={loc.name: s["baseline_scale"] for loc in locations},
     )
     em = EmissionsModel(params)
+
+    # Optional mixing-height lid: build per-hour MetSpec copies with the
+    # nocturnal/daytime lid set. None => use met unchanged (baseline).
+    if mixing_height_night_m is not None:
+        met = [
+            m.model_copy(
+                update={
+                    "mixing_height_m": mixing_height_night_m if m.is_night else mixing_height_day_m,
+                },
+            )
+            for m in met
+        ]
 
     n_t = len(drivers)
     pred = np.zeros((n_t, len(receptors)))

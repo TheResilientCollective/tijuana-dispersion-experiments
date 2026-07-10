@@ -18,8 +18,9 @@ IMAGE    := nrp-worker
 
 GIT_SHA := $(shell git rev-parse --short HEAD)
 
-IMAGE_TAG_SHA := $(REGISTRY)/$(ORG)/$(IMAGE):$(GIT_SHA)
-IMAGE_TAG_DEV := $(REGISTRY)/$(ORG)/$(IMAGE):dev
+IMAGE_BASE := $(REGISTRY)/$(ORG)/$(IMAGE)
+IMAGE_TAG_SHA := $(IMAGE_BASE):$(GIT_SHA)
+IMAGE_TAG_DEV := $(IMAGE_BASE):dev
 
 # Source GitLab creds from nrp/.env; resolve GH_TOKEN from gh if unset. Used as a
 # prefix inside every recipe that talks to Docker so login + push share one shell
@@ -59,8 +60,9 @@ docker-build:
 			--secret id=gh_token,env=GH_TOKEN \
 			-t $(IMAGE_TAG_SHA) \
 			-t $(IMAGE_TAG_DEV) \
+			-t $(IMAGE_BASE):latest \
 			. ; \
-		echo "Built + tagged: $(IMAGE_TAG_SHA) , :dev"'
+		echo "Built + tagged: $(IMAGE_TAG_SHA) , :dev , :latest"'
 
 # Login AND push in the SAME shell — the Docker Desktop keychain helper can drop
 # a credential written by a prior shell ("context deadline exceeded"), which is
@@ -74,9 +76,8 @@ docker-push:
 			echo "✗ $(IMAGE_TAG_SHA) not built yet — run: make docker-build"; exit 1; \
 		fi; \
 		echo "$$GITLAB_TOKEN" | docker login $(REGISTRY) -u "$$GITLAB_USER" --password-stdin; \
-		docker push $(IMAGE_TAG_SHA); \
-		docker push $(IMAGE_TAG_DEV); \
-		echo "✓ Pushed $(IMAGE_TAG_SHA) and :dev"; \
+		docker push --all-tags $(IMAGE_BASE); \
+		echo "✓ Pushed all local $(IMAGE_BASE) tags ($(GIT_SHA), dev, latest)"; \
 		echo "  Pin the digest for Helm/.env:"; \
 		echo "  DAGSTER_IMAGE=$$(docker inspect --format='"'"'{{index .RepoDigests 0}}'"'"' $(IMAGE_TAG_SHA))"'
 

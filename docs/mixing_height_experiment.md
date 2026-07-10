@@ -121,18 +121,18 @@ bound, the fitted lid is physically credible, not just a fudge factor.
 Report both through the existing pipeline (`runs/sobol/…`, `runs/mcmc/…`);
 log the comparison as a new `calibration_status.md` entry.
 
-## 6. Open design decisions (resolve before coding)
+## 6. Decisions — LOCKED 2026-07-10
 
-1. **1 vs 2 new params** — fit `L_night` only (recommended) or also
-   `L_day`?
-2. **Regime key** — binary `is_night` (recommended first) vs `stable_atm`
-   vs a smooth diel curve.
-3. **σz for the well-mixed threshold** — reuse core's `briggs_sigma`
-   (already there) — no new stability code needed.
-4. **Scope** — full 12-param Sobol+MCMC re-run (clean comparison, more
-   compute) vs a cheaper MCMC-only treatment first (faster signal). The
-   500-particle MCMC + pools/retry makes either feasible.
-5. **obs_sigma** — the baseline's fixed `obs_sigma=10` made coverage
-   meaningless. Consider estimating `obs_sigma` (or per-receptor) *in the
-   same treatment run*, so a coverage improvement is trustworthy. This may
-   be the higher-leverage change and could be tested alongside, or first.
+1. **Fit `L_night` only**; `L_day` fixed at 1500 m.
+2. **Binary `is_night`** regime key (smooth/`stable_atm` deferred).
+3. σz for the well-mixed threshold reuses core's `briggs_sigma`.
+4. **MCMC treatment first** (the decisive posterior-predictive signal),
+   500 particles × 8 chains (pools+retry). A 12-param Sobol follows only
+   if the lid demonstrably helps.
+5. **Estimate `obs_sigma` per-receptor** in the SAME treatment run — the
+   lid fixes the *bias*, a fitted σ makes the *coverage* meaningful;
+   either alone is hard to interpret.
+
+So the treatment adds **two** kinds of new fittable quantity vs the
+11-param baseline: `mixing_height_night_m` (the lid) and per-receptor
+`obs_sigma` (3 values) — the latter in the likelihood, not the plume.

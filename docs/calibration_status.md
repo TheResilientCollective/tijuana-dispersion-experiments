@@ -32,6 +32,50 @@ search — it is in fact our primary, best-fit receptor.)
 
 ---
 
+## 2026-07-10 — mixing_height_treatment (lid + per-receptor obs_sigma; negative, confounded)
+
+**Question**: Does adding a nocturnal mixing lid (`mixing_height_night_m`,
+prior U(50, 500) m, binary `is_night` regime, `L_day`=1500 m fixed) fix the
+NESTOR 3.4× under-prediction — with per-receptor `obs_sigma` estimated in
+the same run so coverage is meaningful? (Design:
+`docs/mixing_height_experiment.md`; image `nrp-worker:2597a82`.)
+
+**Result**: Baseline re-run (same seed/window/particles, now archived:
+`runs/mcmc/…_seed42_2026-07-10/`) reproduces the mis-specification: max
+Rhat 1.09, 7/11 params railing, coverage 0–7%, NESTOR obs 41 → pred 12.
+Treatment (`runs/mcmc/…_seed42_mhlid_fitsig_2026-07-10/`) **converged
+beautifully (max Rhat 1.004, ESS ≥3200) but for the wrong reason**:
+- **`L_night` is unidentified**: posterior 280 ± 126 m, 94% HDI 79–492 —
+  essentially the U(50, 500) prior returned. The plausibility gate
+  (concentrate in ~50–300 m) FAILED.
+- **The free noise ate the signal**: fitted `obs_sigma` = 9.3 (SAN
+  YSIDRO), **89.3 (NESTOR — more than 2× the obs mean of 41)**, 17.7 (IB).
+  With NESTOR's misfit absorbable as noise, the likelihood preferred
+  *shrinking* emissions (`baseline_scale` 2.45→1.43, `diel_amplitude`
+  9.4→6.3) over using the lid: predicted means collapsed everywhere
+  (SY 16.3→4.1, NESTOR 12.2→**2.5**, IB 12.6→3.1). NESTOR bias *worsened*
+  3.4×→16×; its RMSE 83.8→93.5. Coverage "improved" to 18–29% purely via
+  inflated σ.
+- Several formerly-railing params (substrate_alpha, substrate_threshold,
+  diel_amplitude/phase) moved interior — but with posteriors ≈ priors,
+  i.e. released by the noise inflation, not newly identified.
+
+**State change**: Bundling the lid with free per-receptor `obs_sigma`
+(design decision #5) was a mistake — the two changes are confounded, and
+an unconstrained per-receptor σ gives a mis-specified mean model an escape
+hatch: explain NESTOR as pure noise and fit nothing. We have NOT yet
+tested the lid on its own; this run does not refute the mixing-height
+hypothesis, it refutes the joint design. Perfect Rhat under mis-specification
+is a warning sign, not a success.
+
+**Next**: (1) Re-run the treatment with the lid ON but `obs_sigma` FIXED
+at 10 (isolates the lid; one config flag). (2) If the lid then helps,
+re-introduce per-receptor σ with an informative prior (e.g. HalfNormal
+scaled to each receptor's obs spread) instead of flat, so it can't absorb
+3× bias. (3) Sanity-check the forward path: confirm the lid actually
+amplifies NESTOR's nocturnal hours at fixed emissions (one cheap forward
+sweep over `L_night` ∈ {50, 100, 200, 400} before burning another MCMC).
+
 ## 2026-07-10 — mcmc_smc_calibration (first Bayesian posterior; model mis-specification confirmed)
 
 **Question**: Can a real Bayesian MCMC over the 11 emission parameters —

@@ -556,7 +556,7 @@ def build_index(
             metadata={"status": "skipped (no S3 bucket)"},
         )
 
-    s3_client = context.resources.s3.get_client()
+    s3_client = context.resources.s3  # dagster-aws sets context.resources.s3 to the boto3 client
 
     # Aggregate all manifests
     ledger = build_ledger(s3_client, bucket)
@@ -768,7 +768,7 @@ def mcmc_aggregate(
     bucket = os.getenv("DAGSTER_S3_BUCKET")
     archived: dict[str, str] = {}
     if bucket:
-        s3c = context.resources.s3.get_client()
+        s3c = context.resources.s3  # dagster-aws sets context.resources.s3 to the boto3 client
         prefix = _archive_prefix("mcmc", tag)
 
         samples = combined.posterior.to_dataframe().reset_index()
@@ -1030,7 +1030,7 @@ def cv_aggregate(
     bucket = os.getenv("DAGSTER_S3_BUCKET")
     archived: dict[str, str] = {}
     if bucket and not folds_df.empty:
-        s3c = context.resources.s3.get_client()
+        s3c = context.resources.s3  # dagster-aws sets context.resources.s3 to the boto3 client
         prefix = _archive_prefix("cv", tag)
         s3c.put_object(
             Bucket=bucket, Key=f"{prefix}/cv_folds.csv", Body=folds_df.to_csv(index=False).encode()

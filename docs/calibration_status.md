@@ -32,6 +32,55 @@ search — it is in fact our primary, best-fit receptor.)
 
 ---
 
+## 2026-07-10 — mcmc_smc_calibration (first Bayesian posterior; model mis-specification confirmed)
+
+**Question**: Can a real Bayesian MCMC over the 11 emission parameters —
+not the old point-estimate calibration — produce a converged, calibrated
+posterior on the Mar 13–16 2026 window, and (the decisive test) does the
+dispersion model actually *fit* the observed H₂S once uncertainty is
+propagated?
+
+**Result**: The **pipeline works end-to-end on NRP** — 8 independent
+single-chain SMC fits (one K8s pod per chain, `pool="nrp_heavy"` capped at
+4, preemption-retry), fanned into `mcmc_aggregate` → cross-chain
+diagnostics + posterior-predictive skill → durable report at
+`s3://tj-calibration/runs/mcmc/2026-03-13_2026-03-16_8chains_500p_seed42_2026-07-10/`.
+SMC was used because the `tijuana_dispersion` forward model is a black box
+(no gradients for NUTS); priors are Sobol-informed. **The science verdict
+is negative and clear:**
+- **Not converged**: max Rhat 1.35 at 500 particles (500 was a deliberate
+  reduction from 1000 to survive NRP node preemption; convergence suffered
+  but is *secondary* to the finding below).
+- **7 of 11 parameters rail against their bounds even after widening them**
+  (Q10→floor, substrate_alpha/diel_amplitude/f_arch_bay→ceiling, etc.).
+  Widening just moved the rail — the signature of unidentifiability.
+- **Posterior-predictive fit is poor** (the decisive number). Mean 94%
+  interval coverage **2.8%** (target ~94%); per-receptor corr 0.08–0.50;
+  systematic bias: **NESTOR-BES (Berry) under-predicted 3.4×** (obs 41 →
+  pred 12, RMSE 84), **SAN YSIDRO over-predicted 2.8×** (obs 6 → pred 16).
+  `obs_sigma=10 ppb` is far too small vs RMSE 20–84, so the likelihood is
+  over-confident and coverage collapses to ~0.
+
+**State change**: We now have (a) a working, reusable Bayesian calibration
+pipeline with uncertainty quantification and a durable report, and (b) a
+quantified conclusion that **the current dispersion+emission model cannot
+reproduce this window's concentrations** — the parameter railing is a
+*symptom* of structural mis-specification, not a bounds or particle-count
+problem. This corroborates standing open questions: the **NESTOR under-
+prediction 3.4×** aligns with the nocturnal **mixing-height collapse**
+hypothesis (unbounded vertical mixing → 5–10× under-prediction of
+ground-level concentration) and the logged "+125 ppb NESTOR under-
+prediction on calm S-wind hours"; the over-confident likelihood shows the
+noise model needs to be realistic/estimated.
+
+**Next**: Model-side experiments, now cheap to run through this pipeline:
+(1) add a **mixing-height cap** to the forward model and re-fit — expected
+to lift NESTOR predictions most; (2) **estimate `obs_sigma`** (ideally
+per-receptor) instead of fixing it, so coverage is meaningful; (3) **fix
+the near-inert `f_arch_*` fractions** to remove degeneracy; then re-run at
+≥1000 particles once a non-preemptible/short-enough configuration is
+sorted (or after an NRP priority-class request) to confirm convergence.
+
 ## 2026-06-24 — multi-window Sobol deferred; MCMC design phase begins
 
 **Question**: Can we validate the single-window Sobol sensitivities across

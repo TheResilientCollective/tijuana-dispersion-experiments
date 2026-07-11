@@ -32,6 +32,50 @@ search — it is in fact our primary, best-fit receptor.)
 
 ---
 
+## 2026-07-11 — drainage_box MCMC (single-window): best NESTOR fit yet; ebb term railed — widen and go multi-window
+
+**Question**: Does the drainage-kernel + tide-ebb treatment (15 params,
+obs_sigma fixed at 10) improve the fit on Mar 13–16?
+Archive: `runs/mcmc/2026-03-13_2026-03-16_8chains_500p_seed42_drainbox_2026-07-11/`.
+
+**Result vs the 11-param baseline** (same window/seed/particles):
+| metric | baseline | drainage_box |
+|---|---|---|
+| NESTOR RMSE | 83.7 | **74.8** |
+| NESTOR corr | 0.50 | **0.58** |
+| NESTOR pred mean (obs 41.1) | 12.2 (3.4× under) | **17.1 (2.4× under)** |
+| IB pred mean (obs 8.0) | 12.6 | **6.6** (coverage 0.07→0.18) |
+| SAN YSIDRO | over 2.8×, corr 0.08 | over 2.3×, corr −0.02 (worse corr) |
+| max Rhat | 1.09 | 1.21 (not converged) |
+
+Treatment posteriors — the informative part:
+- **`a_ebb` RAILS at its upper bound** (295 ± 3 on U(0, 300)): the data
+  wants an even stronger ebb term. Bound did the fitting → widen.
+- **`λ_along` = 2010 ± 180 m — cleanly identified, interior** (Rhat
+  1.00). The drainage kernel's along-valley scale is real and ~2 km.
+- `λ_cross` = 2536 (pushing its 3000 bound) and `τ` = 11.0 h (pushing
+  12): the sampler wants a wider, longer-lived box — widening λ_cross
+  also erodes directionality, which is likely what dragged SAN YSIDRO's
+  corr down (a big cross scale boosts SY along with NESTOR).
+- `f_arch_channel` 0.53 → **2.37**: channel sources upweighted, as the
+  Saturn mechanism predicts.
+- diel params railed hard (amplitude→10 ceiling, phase→0): the diel
+  machinery is straining to make emissions nocturnal — some of that is
+  the box's job now; watch for redistribution once priors widen.
+
+**State change**: First treatment that materially improves NESTOR while
+keeping σ honest (fixed 10). The mechanism params are being *used*
+(a_ebb slammed the ceiling, λ_along identified) rather than ignored
+(contrast: mixing-height lid returned its prior). Poor Rhat (1.21) and
+three near/at-bound treatment params say this posterior is provisional.
+
+**Next**: (1) widen priors — `a_ebb` U(0, 1000), `λ_cross` U(100, 6000),
+`τ` U(0.5, 24); (2) fold into the **multi-window campaign** (machinery
+already wired, windows locked below) rather than another single-window
+rerun — pooled windows constrain the SY/NESTOR trade-off far better than
+this one window can; (3) coverage stays meaningless until bias closes —
+revisit per-receptor σ (with informative priors) only after that.
+
 ## 2026-07-11 — multi-window campaign design (windows locked; machinery wired)
 
 **Plan** (approved): calibrate the drainage-box model **jointly across

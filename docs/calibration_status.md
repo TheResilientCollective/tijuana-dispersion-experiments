@@ -32,6 +32,54 @@ search — it is in fact our primary, best-fit receptor.)
 
 ---
 
+## 2026-07-11 — receptor_box_lambda_sweep (kernel built; inventory geometry can't split NESTOR from SY)
+
+**Question**: Does a receptor-dependent stagnation box — per-receptor
+`E_r = Σ_s rate_s · exp(−d_rs/λ)` — reproduce the calm-night receptor
+pattern (obs NESTOR 149.7 / IB 27.3 / SY 10.1, i.e. N/SY ≈ 15×)?
+
+**Implementation (done)**: `tijuana-dispersion` branch
+`feat/receptor-box` @ `9a53940` (v0.4.0, schema 0.5.0):
+`stagnation.distance_weighted_e_local`, `StagnationBoxBackend(lambda_m=…)`,
+`ForwardRunRequest.stagnation_box` (λ, tau_h, area_m2 — all calibratable),
+composes with the temperature driver; `λ=None` is v1 byte-identical;
+62 tests pass; per-test cache isolation added. (mypy hook pre-broken at
+base 73161d9 — numpy stubs drift, skipped.)
+
+**Result of the λ sweep** (λ ∈ {250…4000} m, baseline posterior-mean
+emissions, 16 calm-night hours): the kernel moves IB down (IB/SY
+0.16–0.75 vs obs 2.7) but **NESTOR/SY stays ≈ 1.0 at every λ** (obs: 14.9).
+Why: SAN YSIDRO is *also* channel-adjacent — CDLP E (1.22 km), CDLP W
+(1.35 km), Dairy Mart Bridge (1.66 km) vs NESTOR's Saturn Blvd Bridge
+(0.89 km). Archetype-summed kernel weights are near-identical for the
+two receptors at every λ (e.g. λ=1000 m: channel 0.82 vs 0.84, total
+1.25 vs 1.26). **No distance decay over the current inventory — even
+with free per-archetype weights — can produce NESTOR ≫ SY.**
+
+**State change**: The calm-night NESTOR anomaly is not explainable by
+horizontal proximity to the *inventoried* sources with *shared archetype
+rates*. Two candidate structures remain:
+1. **Per-source hotspot**: the river at the Saturn Blvd crossing is a
+   locally much stronger emitter than the CDLP/Dairy Mart channel
+   segments (ponding/low-flow turbulence). Then a per-source rate
+   multiplier for Saturn Blvd Bridge — not a smooth archetype weight —
+   is the missing parameter.
+2. **Receptor-side valley confinement**: Berry School sits on the
+   Tijuana River valley floor where nocturnal cold-air drainage pools;
+   the SY monitor sits higher on the slope, above the shallow drainage
+   layer. Then the box needs a per-receptor H_mix / valley-membership
+   term, not (only) a distance kernel.
+These predict different things: (1) says NESTOR's excess should follow
+Saturn-Blvd-specific flow conditions; (2) says it should follow
+stability/drainage nights regardless of which source is active, and
+that *any* valley-floor receptor would see it while mesa receptors
+don't.
+
+**Next**: Needs field/terrain input to choose (elevations of the three
+monitors vs the valley floor would already discriminate). Kernel is
+merged-ready either way — it's the right chassis for both, and λ+tau
+remain calibratable in the eventual MCMC.
+
 ## 2026-07-11 — sigmaz_sweep + regime stratification (the misfit lives in the stagnation box)
 
 **Question**: Is the σz scheme (Briggs rural over-diluting on stable

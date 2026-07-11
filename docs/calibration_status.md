@@ -32,6 +32,43 @@ search — it is in fact our primary, best-fit receptor.)
 
 ---
 
+## 2026-07-11 — saturn_culvert_field_knowledge + tide-lag check (mechanism identified)
+
+**Field knowledge** (user, 2026-07-11): the calm-night driver at NESTOR
+is **drainage flow**, fed by the **Saturn Blvd culvert**: the culvert
+ponds the river upstream, and at low tides there is a **drop from the
+culvert** (turbulent aeration → H₂S stripping). So the two candidate
+structures from the λ-sweep entry are *coupled*: Saturn Blvd is a
+tide-modulated hotspot, and nocturnal drainage flow delivers it
+down-valley to NESTOR (Berry).
+
+**Empirical check** (Mar 13–16 window; `tide_height` is already in the
+parquet and in `EmissionDrivers.tide_height_m`): NESTOR calm-night H₂S
+vs tide —
+- lag 0: corr ≈ −0.10 (calm night), −0.35 (all night)
+- **lag 2–3 h: corr +0.60 (calm night)**, +0.40..0.49 (all night)
+- i.e. concentrations peak a few hours *after* high tide, **on the
+  ebb** — consistent with the culvert mechanics (high tide submerges
+  the drop and backs up ponding; the falling tide re-exposes the drop
+  and drains the ponded volume over it) plus down-valley transport lag.
+- Low-vs-high tide split, calm nights: 167 vs 128 ppb (NESTOR).
+- *Caveat*: n=15 calm-night hours in one 3-day window; the ~12.4 h tide
+  vs 12 h night cycle aliases — treat as supporting, not proof. A
+  multi-window replication is cheap once the model form exists.
+
+**Proposed model form** (next implementation, both calibratable through
+the existing pipeline):
+1. **Tide-ebb hotspot** (emissions side; `EmissionDrivers.tide_height_m`
+   already wired): per-source multiplier for `Saturn Blvd Bridge` —
+   `f_culvert(t) = 1 + a_ebb · max(0, −d(tide)/dt)` (or a lagged-tide
+   sigmoid), `a_ebb` calibratable. Zero new data plumbing.
+2. **Drainage kernel** (box side; chassis from `feat/receptor-box`):
+   replace the isotropic `exp(−d/λ)` with an along-valley directional
+   weight on stagnation hours — receptors accumulate *upstream* channel
+   sources with decay length `λ_valley` down the drainage axis. NESTOR
+   (down-valley) then integrates the Saturn/Hollister/Dairy Mart chain;
+   SAN YSIDRO (up-valley) does not — which is what the 14.9× ratio needs.
+
 ## 2026-07-11 — receptor_box_lambda_sweep (kernel built; inventory geometry can't split NESTOR from SY)
 
 **Question**: Does a receptor-dependent stagnation box — per-receptor

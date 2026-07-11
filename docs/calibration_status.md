@@ -32,6 +32,32 @@ search — it is in fact our primary, best-fit receptor.)
 
 ---
 
+## 2026-07-11 — reference: Pankow et al. 2006 (stream VOC source apportionment / transfer physics)
+
+**Source**: Pankow, J.F., Asher, W.E., Zogorski, J.S. "Source
+Apportionment Modeling of Volatile Organic Compounds in Streams."
+*Environ. Toxicol. Chem.* 2006, 25(4), 921–932. (Methods paper; PDF
+held locally only — NOT in git.)
+
+Why it's on file (framework, not evidence):
+- **Standard water→air transfer parameterization**: volatilization flux
+  `J_vol = k_OL·c_w` with the gas/liquid transfer velocity `k_OL`
+  depending on stream flow/turbulence, wind, temperature, and the
+  compound (Henry's-law partitioning `c_g/c*_w = H/RT`). This is the
+  physical quantity our ad-hoc hotspot factors (`f_tide_ebb`,
+  `f_flow_turbulence`) are standing in for — if the culvert terms ever
+  need formalizing, replace them with a `k_OL(turbulence)` model at the
+  drop rather than stacking more multipliers.
+- **Characteristic time/distance framework** (τ_s = c_w·h/(c*_w·k_OL),
+  λ_km = ū·τ): predicts how far downstream air–water exchange
+  re-shapes composition — the right tool for interpreting the
+  Frobenius et al. dissolved-H₂S depletion gradient (river → estuary →
+  ocean) as a stripping length, and for placing effective emission
+  segments along the channel instead of point sources.
+- **SA_F vs SA_J source-apportionment conventions** for volatilizable
+  compounds — relevant if we later apportion dissolved H₂S among
+  in-stream sources (their STREAMVOC model is prior art).
+
 ## 2026-07-11 — published evidence: Frobenius et al. 2026 confirms the Saturn Blvd mechanism
 
 **Source**: Frobenius, C.R., Herbst, J.K., Hamlin, J.D., Rico, B.,

@@ -57,3 +57,7 @@ Thumbs.db
 
 # Dagster local runtime state (NRP local dev) — never committed
 dagster_home/
+
+# Reference papers kept locally (copyright — never commit; titles are
+# logged in docs/calibration_status.md instead)
+*.pdf

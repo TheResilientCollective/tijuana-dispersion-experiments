@@ -32,6 +32,64 @@ search — it is in fact our primary, best-fit receptor.)
 
 ---
 
+## 2026-07-11 — sigmaz_sweep + regime stratification (the misfit lives in the stagnation box)
+
+**Question**: Is the σz scheme (Briggs rural over-diluting on stable
+nights) the missing NESTOR amplification the lid couldn't provide?
+
+**Result**: No — and the stratified view relocates the problem entirely.
+Two forward-path discoveries first:
+- **`service.run_forward` caches results by request hash** (temp-dir
+  JSON). Internal-physics variants that don't change the request hash
+  silently return the first variant's cached array — the first σz sweep
+  produced five identical columns this way. Defeat the cache (fresh
+  `CACHE_DIR` per variant) for any monkeypatched sensitivity study.
+  (No MCMC impact: identical request ⇒ identical result there.)
+- **Regime dispatch is live in every Sobol/MCMC run to date**:
+  `nrp/sobol.py` never sets `disable_regime_dispatch`, so calm night
+  hours (`is_night & u < 2.5 m/s`) are served by the **uncalibrated,
+  receptor-independent stagnation box**, not the plume. In the Mar 13–16
+  window that's **16 of 38 night hours** (22 night-windy, 34 day).
+
+Stratified obs vs prediction (baseline posterior-mean emissions):
+| stratum | NESTOR obs→pred | SY obs→pred | IB obs→pred |
+|---|---|---|---|
+| night-calm (box, 16 h) | **149.7 → 40.0** | 10.1 → 40.0 | 27.3 → 40.0 |
+| night-windy (plume, 22 h) | 15.4 → 9.7 | 6.7 → 7.8 | 3.1 → 9.3 |
+| day (plume, 34 h) | 6.6 → 1.0 | 3.3 → 11.0 | 2.0 → 2.1 |
+
+- **NESTOR's signal is almost entirely calm-night** (obs mean 149.7 ppb
+  there vs 6.6–15.4 elsewhere), and on exactly those hours the box
+  predicts a flat 40 ppb at every receptor — under NESTOR 3.7×, over
+  SAN YSIDRO 4×. σz variants (class shift +1/+2, σz×0.5/×0.3) by
+  construction cannot touch this stratum.
+- On the night-windy stratum σz does have leverage (up to 3.3× at
+  σz×0.3) but overshoots SY/IB badly; and that stratum's obs are small.
+  σz tuning is a second-order knob, not the fix.
+
+**The Saturn Blvd point** (field knowledge, 2026-07-11): the known
+source near NESTOR is the Tijuana River channel at the **Saturn Blvd
+crossing** — and `Saturn Blvd Bridge` (channel archetype) is already in
+the inventory at **0.89 km from NESTOR-BES**, the closest source to any
+receptor. But the v1 box is receptor-independent, so this proximity is
+*invisible on precisely the calm-night hours that dominate NESTOR's
+signal*. The geometry that should explain NESTOR≫SY/IB at night is
+discarded by the model component that rules those hours.
+
+**State change**: The NESTOR under-prediction is not a plume-physics
+problem (lid dead, σz second-order): **it's the uncalibrated,
+geometry-blind stagnation box**. The receptor pattern on calm nights
+(NESTOR 150 / IB 27 / SY 10) looks like distance-to-channel-sources —
+exactly what a receptor-dependent local-emissions kernel would produce
+with Saturn Blvd Bridge 0.89 km from NESTOR.
+
+**Next**: Make the stagnation box receptor-dependent: per-receptor
+`E_local` as a distance-weighted sum of source rates (e.g.
+`Σ_s rate_s · exp(-d_rs/λ)`), with λ, `tau_h`, and box height as
+calibratable parameters (service issue #3's planned follow-up; the "242
+Berry >100 ppb hours" are the natural calibration target). Forward-sweep
+λ locally first — same harness — before any MCMC.
+
 ## 2026-07-11 — lid_forward_sweep (mixing-height hypothesis killed at the physics level)
 
 **Question**: At fixed emissions (baseline posterior means), does the

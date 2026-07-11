@@ -32,6 +32,50 @@ search — it is in fact our primary, best-fit receptor.)
 
 ---
 
+## 2026-07-11 — drainage_kernel + tide_ebb implemented; forward validation positive
+
+**Implementation** (`tijuana-dispersion` `feat/receptor-box` @ `03bf5d5`,
+69 tests pass):
+- `stagnation.drainage_weighted_e_local(sources, receptor, λ_along,
+  λ_cross, bearing)`: directional kernel — upstream sources decay on
+  λ_along down the drainage axis; abeam/downstream on the short λ_cross.
+  Exposed via `StagnationBoxSpec.drainage_bearing_deg` (valley ≈ 280°)
+  + `lambda_cross_m`.
+- Tide-ebb culvert term (derivative form, per user decision):
+  `EmissionDrivers.tide_rate_m_h` (default 0 = inert; caller computes
+  d(tide)/dt across hours), `EmissionParameters.a_ebb` +
+  `ebb_source_names`, `f_tide_ebb = 1 + a_ebb·max(0, −d(tide)/dt)`.
+  Self-lagging; the box residence time supplies the remaining lag.
+
+**Forward validation** (Mar 13–16, baseline posterior-mean emissions,
+bearing 280°, Saturn Blvd Bridge as the ebb source — NO fitting):
+| λ_cross | a_ebb | N/SY | IB/SY | corr(NESTOR, calm hrs) |
+|---|---|---|---|---|
+| (isotropic kernel, any λ) | 0 | 1.0 | — | −0.03 |
+| 500 | 0 | 2.2 | 0.6 | −0.03 |
+| 500 | 40 | 5.7 | 1.3 | +0.33 |
+| 500 | 100 | **10.9** | **2.3** | **+0.37** |
+| obs | | **14.9** | **2.7** | (tide-lag corr +0.60) |
+
+The two structures together approach the observed calm-night receptor
+pattern AND give the predictions tide-locked temporal skill inside the
+stratum, where every previous model form was flat. Absolute scale is low
+(NESTOR 3.4 vs 149.7 ppb) but that's the uncalibrated τ/area and
+`baseline_scale` (bounds allow 200×) — the *pattern* was the hard part.
+a_ebb ~ 40–100 means peak-ebb Saturn emission 15–40× its baseline, i.e.
+the culvert drop dominates the calm-night budget — consistent with the
+field description (the drop is the aeration event; everything else is
+quiescent ponded water).
+
+**Next**: wire calibration: (1) experiments repo — compute
+`tide_rate_m_h` in `make_drivers_and_met`, pass `stagnation_box` spec +
+`a_ebb`/`ebb_source_names` through `predict_concentrations`, config-
+gated like the mixing-height treatment; new params `a_ebb`, `λ_along`,
+`λ_cross`, `tau_h` (bearing fixed at 280°). (2) Re-pin image to the new
+service commit; MCMC treatment v2 on NRP (obs_sigma fixed at 10 —
+lesson from the mhlid_fitsig run). (3) Multi-window tide-lag
+replication to de-alias the 12.4 h/12 h cycle overlap.
+
 ## 2026-07-11 — saturn_culvert_field_knowledge + tide-lag check (mechanism identified)
 
 **Field knowledge** (user, 2026-07-11): the calm-night driver at NESTOR

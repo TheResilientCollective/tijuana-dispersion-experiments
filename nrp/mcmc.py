@@ -65,12 +65,26 @@ DRAINAGE_BOX_PRIOR_RANGES: dict[str, tuple[float, float]] = {
     "box_tau_h": (0.5, 12.0),
 }
 
+#: Priors for the flow-turbulence term (Frobenius et al. 2026: hotspot
+#: emission scales with river flow at the Saturn Blvd drop). a_flow is
+#: per m³/s above threshold — flows span ~0.4–8 m³/s across windows, so
+#: 30/m³/s allows >100× contrast without the bound doing the fitting.
+#: Threshold brackets the paper's ~10 MGD (0.44 m³/s) collapse point.
+#: ONLY identifiable across windows with flow contrast; within a
+#: constant-flow window it degenerates into the source baseline (leave
+#: the flag off there).
+FLOW_TURBULENCE_PRIOR_RANGES: dict[str, tuple[float, float]] = {
+    "a_flow": (0.0, 30.0),
+    "flow_threshold_m3s": (0.0, 1.5),
+}
+
 
 def build_priors(
     sobol_indices: pd.DataFrame | None = None,
     include_mixing_height: bool = False,
     mixing_height_range: tuple[float, float] = (50.0, 500.0),
     include_drainage_box: bool = False,
+    include_flow_turbulence: bool = False,
 ) -> dict[str, PriorSpec]:
     """Build prior specs, Sobol-informed when indices are supplied.
 
@@ -121,6 +135,10 @@ def build_priors(
 
     if include_drainage_box:
         for name, (lo, hi) in DRAINAGE_BOX_PRIOR_RANGES.items():
+            priors[name] = PriorSpec(name=name, dist_type="uniform", low=lo, high=hi)
+
+    if include_flow_turbulence:
+        for name, (lo, hi) in FLOW_TURBULENCE_PRIOR_RANGES.items():
             priors[name] = PriorSpec(name=name, dist_type="uniform", low=lo, high=hi)
 
     return priors

@@ -205,6 +205,7 @@ def load_window(parquet_path: Path, window: tuple[str, str]) -> pd.DataFrame:
         "sbiwtp_flow_mgd",
         "sbiwtp_deficit",
         "tide_height",
+        "Flow (m^3/s)--Border",
     ]
     return df[cols].groupby(["hour", "site_name"], as_index=False).mean(numeric_only=True)
 
@@ -237,6 +238,9 @@ def make_drivers_and_met(
                 else 0.0,
                 tide_height_m=float(row["tide_height"]) if pd.notna(row["tide_height"]) else 0.0,
                 is_night=is_night,
+                border_flow_m3s=float(row["Flow (m^3/s)--Border"])
+                if pd.notna(row["Flow (m^3/s)--Border"])
+                else None,
             ),
         )
         met.append(
@@ -288,6 +292,8 @@ def predict_concentrations(
     mixing_height_day_m: float = 1500.0,
     a_ebb: float = 0.0,
     ebb_source_names: tuple[str, ...] = ("Saturn Blvd Bridge",),
+    a_flow: float = 0.0,
+    flow_threshold_m3s: float = 0.44,
     drainage_lambda_along_m: float | None = None,
     drainage_lambda_cross_m: float = 500.0,
     drainage_bearing_deg: float = 280.0,
@@ -344,7 +350,9 @@ def predict_concentrations(
         },
         baselines_g_s={loc.name: s["baseline_scale"] for loc in locations},
         a_ebb=a_ebb,
-        ebb_source_names=ebb_source_names if a_ebb > 0.0 else (),
+        ebb_source_names=ebb_source_names if (a_ebb > 0.0 or a_flow > 0.0) else (),
+        a_flow=a_flow,
+        flow_threshold_m3s=flow_threshold_m3s,
     )
     em = EmissionsModel(params)
 

@@ -215,6 +215,10 @@ class McmcConfig(dg.Config):
     drainage_box: bool = False
     drainage_bearing_deg: float = 280.0
     ebb_source: str = "Saturn Blvd Bridge"
+    # Flow-turbulence term (Frobenius et al. 2026): 2 extra fitted params
+    # (a_flow, flow_threshold_m3s). Only identifiable across windows with
+    # flow contrast — leave off for constant-flow windows like Mar 13-16.
+    flow_turbulence: bool = False
 
 
 @dg.asset(
@@ -670,6 +674,8 @@ def mcmc_chain_results(
             mixing_height_day_m=config.mixing_height_day_m,
             a_ebb=params.get("a_ebb", 0.0),
             ebb_source_names=(config.ebb_source,),
+            a_flow=params.get("a_flow", 0.0),
+            flow_threshold_m3s=params.get("flow_threshold_m3s", 0.44),
             drainage_lambda_along_m=params.get("drainage_lambda_along_m"),
             drainage_lambda_cross_m=params.get("drainage_lambda_cross_m", 500.0),
             drainage_bearing_deg=config.drainage_bearing_deg,
@@ -685,10 +691,11 @@ def mcmc_chain_results(
         sobol_indices=sobol_indices,
         include_mixing_height=config.mixing_height,
         include_drainage_box=config.drainage_box,
+        include_flow_turbulence=config.flow_turbulence,
     )
     context.log.info(
         "MCMC chain %s (seed %d): %d obs points, %d fwd params; SMC × %d particles"
-        " | mixing_height=%s fit_obs_sigma=%s drainage_box=%s (window %s→%s)",
+        " | mixing_height=%s fit_obs_sigma=%s drainage_box=%s flow_turbulence=%s (window %s→%s)",
         context.partition_key,
         chain_seed,
         obs_flat.size,
@@ -697,6 +704,7 @@ def mcmc_chain_results(
         config.mixing_height,
         config.fit_obs_sigma,
         config.drainage_box,
+        config.flow_turbulence,
         config.window_start,
         config.window_end,
     )
@@ -740,6 +748,7 @@ def mcmc_chain_results(
             "drainage_box": config.drainage_box,
             "drainage_bearing_deg": config.drainage_bearing_deg,
             "ebb_source": config.ebb_source,
+            "flow_turbulence": config.flow_turbulence,
         },
     }
 
@@ -805,8 +814,11 @@ def mcmc_aggregate(
         # ignore the very effect being tested.
         treat_mh = bool(cfg.get("mixing_height", False))
         treat_db = bool(cfg.get("drainage_box", False))
-        extra = (["mixing_height_night_m"] if treat_mh else []) + (
-            list(mcmc.DRAINAGE_BOX_PRIOR_RANGES) if treat_db else []
+        treat_ft = bool(cfg.get("flow_turbulence", False))
+        extra = (
+            (["mixing_height_night_m"] if treat_mh else [])
+            + (list(mcmc.DRAINAGE_BOX_PRIOR_RANGES) if treat_db else [])
+            + (list(mcmc.FLOW_TURBULENCE_PRIOR_RANGES) if treat_ft else [])
         )
         draw_names = [*param_names, *extra]
         n_fwd = len(param_names)
@@ -824,6 +836,10 @@ def mcmc_aggregate(
                     "drainage_bearing_deg": float(cfg.get("drainage_bearing_deg", 280.0)),
                     "box_tau_h": float(x["box_tau_h"]),
                 }
+            if treat_ft:
+                db_kw["a_flow"] = float(x["a_flow"])
+                db_kw["flow_threshold_m3s"] = float(x["flow_threshold_m3s"])
+                db_kw.setdefault("ebb_source_names", (cfg.get("ebb_source", "Saturn Blvd Bridge"),))
             return sobol.predict_concentrations(
                 vec[:n_fwd],
                 param_names,
@@ -858,6 +874,8 @@ def mcmc_aggregate(
         variant += "_fitsig"
     if cfg.get("drainage_box"):
         variant += "_drainbox"
+    if cfg.get("flow_turbulence"):
+        variant += "_flowturb"
     tag = (
         f"{window[0]}_{window[1]}_{n_chains}chains_{n_particles}p"
         f"_seed{base_seed}{variant}_{run_date}"

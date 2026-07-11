@@ -32,6 +32,50 @@ search — it is in fact our primary, best-fit receptor.)
 
 ---
 
+## 2026-07-11 — published evidence: Frobenius et al. 2026 confirms the Saturn Blvd mechanism
+
+**Source**: Frobenius, C.R., Herbst, J.K., Hamlin, J.D., Rico, B.,
+Pomeroy, R.S., Prather, K.A. "River and Coastal Water VOC Emissions
+Drive Spatial and Diurnal Air Quality Variability." *ACS EST Air* 2026,
+3, 1758–1771. doi:10.1021/acsestair.5c00514. (25-day TD-GCMS air + P&T
+water campaign, Sep 2024, four sites incl. Nestor and the river at
+Saturn Blvd + Hollister St. PDF held locally only — NOT in git.)
+
+Findings that bear directly on our model structure:
+- **Saturn Blvd hotspot physics confirmed**: "the placement of four
+  man-made drainage conduits produced a steep drop off, similar to a
+  waterfall, that enhances turbulence and aerates the water" —
+  bubble-mediated stripping is the key emission pathway; persistent
+  foam/bubble patches downstream of the hotspot. This is the culvert
+  drop in our `f_tide_ebb` term (field knowledge, same structure).
+- **River flow is the dominant emission modulator**: peak VOC/H₂S at
+  Nestor coincided with transboundary flow >50 MGD; after the Sep-2024
+  wastewater diversion (<10 MGD) gas-phase VOC/H₂S collapsed **even
+  while dissolved H₂S stayed high** — less turbulence at the drop, less
+  stripping. Sulfur compounds fell 78.3% post-diversion.
+- **Nestor is the downwind receptor**: prevailing winds carry river air
+  to Nestor; max VOC when wind comes from the Saturn Blvd direction or
+  in stagnant (<1 m/s) nights — "stagnant nighttime conditions coupled
+  with high river flow" is exactly our stagnation-regime + drainage
+  geometry.
+- **Nighttime enrichment signature** at Nestor disappeared when the
+  flow was diverted → the diurnal H₂S/VOC signal is source-driven
+  (river), not purely meteorological.
+- Dissolved H₂S drops monotonically river → estuary → ocean (efficient
+  stripping at the drops); ≥31% of Nestor's airborne VOC species are
+  also present in river water.
+
+**Implication for the calibration**: mechanism validated by independent
+measurement. One gap: the paper's dominant modulator is **river flow**,
+not tide. Our Mar 13–16 window has `Flow (m^3/s)--Border` **constant at
+2.10 m³/s ≈ 48 MGD** (a static fill in the parquet) — squarely in the
+paper's "high-flow/drop-active" regime, so a flow term is unidentifiable
+within-window and tide is correctly the only within-window modulator.
+For **multi-window** calibration, add a flow-driven turbulence factor at
+Saturn Blvd (`EmissionDrivers.border_flow_m3s` exists but is not wired
+in `make_drivers_and_met` — wire it then), and prefer windows straddling
+flow changes to identify it.
+
 ## 2026-07-11 — drainage_kernel + tide_ebb implemented; forward validation positive
 
 **Implementation** (`tijuana-dispersion` `feat/receptor-box` @ `03bf5d5`,

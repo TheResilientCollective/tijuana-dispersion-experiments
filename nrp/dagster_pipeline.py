@@ -219,6 +219,15 @@ class McmcConfig(dg.Config):
     # (a_flow, flow_threshold_m3s). Only identifiable across windows with
     # flow contrast — leave off for constant-flow windows like Mar 13-16.
     flow_turbulence: bool = False
+    # Multi-window calibration: additional [start, end] windows pooled into
+    # the SAME likelihood as (window_start, window_end). Empty => the
+    # single-window behaviour, unchanged. Windows are loaded independently
+    # (per-window tide gradients) and concatenated — see
+    # sobol.load_windows_concat.
+    extra_windows: list[list[str]] = []
+    # Held-out validation: [start, end] windows NEVER in the likelihood;
+    # the aggregate scores posterior-predictive skill on them separately.
+    validation_windows: list[list[str]] = []
 
 
 @dg.asset(
@@ -618,6 +627,43 @@ def build_index(
 # ============================================================
 
 
+def _treatment_forward_kwargs(
+    x: dict[str, float],
+    *,
+    mixing_height: bool,
+    drainage_box: bool,
+    flow_turbulence: bool,
+    mixing_height_day_m: float = 1500.0,
+    drainage_bearing_deg: float = 280.0,
+    ebb_source: str = "Saturn Blvd Bridge",
+) -> dict[str, Any]:
+    """Map sampled treatment params ``x`` to predict_concentrations kwargs.
+
+    Shared by the chain likelihood, the aggregate posterior-predictive,
+    and the CV folds so the treatment forward model is defined once.
+    Flags off ⇒ the corresponding kwargs are omitted (library defaults,
+    baseline path untouched).
+    """
+    kw: dict[str, Any] = {}
+    if mixing_height:
+        kw["mixing_height_night_m"] = float(x["mixing_height_night_m"])
+        kw["mixing_height_day_m"] = mixing_height_day_m
+    if drainage_box:
+        kw.update(
+            a_ebb=float(x["a_ebb"]),
+            ebb_source_names=(ebb_source,),
+            drainage_lambda_along_m=float(x["drainage_lambda_along_m"]),
+            drainage_lambda_cross_m=float(x["drainage_lambda_cross_m"]),
+            drainage_bearing_deg=drainage_bearing_deg,
+            box_tau_h=float(x["box_tau_h"]),
+        )
+    if flow_turbulence:
+        kw["a_flow"] = float(x["a_flow"])
+        kw["flow_threshold_m3s"] = float(x["flow_threshold_m3s"])
+        kw.setdefault("ebb_source_names", (ebb_source,))
+    return kw
+
+
 @dg.asset(
     partitions_def=mcmc_partitions,
     group_name="mcmc_posterior",
@@ -650,9 +696,12 @@ def mcmc_chain_results(
 
     # Real observations + forward model, reusing the exact Sobol machinery
     # so the calibration science is identical to the sensitivity analysis.
-    df = sobol.load_window(sobol.DEFAULT_PARQUET, (config.window_start, config.window_end))
-    drivers, met, hours = sobol.make_drivers_and_met(df)
-    obs_mat = sobol.build_obs(df, hours, sobol.RECEPTOR_NAMES)  # (n_hours, n_receptors)
+    # Multi-window calibration pools every fit window into one likelihood.
+    fit_windows = [
+        (config.window_start, config.window_end),
+        *[(w[0], w[1]) for w in config.extra_windows],
+    ]
+    drivers, met, obs_mat = sobol.load_windows_concat(fit_windows)
     valid = ~np.isnan(obs_mat)
     obs_flat = obs_mat[valid]
     if obs_flat.size == 0:
@@ -663,24 +712,18 @@ def mcmc_chain_results(
     def forward_model_fn(params: dict[str, float]) -> np.ndarray:
         """Concrete param dict → predicted concentrations at the valid obs points."""
         row = np.array([params[n] for n in param_names], dtype=float)
-        # Treatment-only params are present only when their treatment is on.
-        mh = params.get("mixing_height_night_m")
-        pred = sobol.predict_concentrations(
-            row,
-            param_names,
-            drivers,
-            met,
-            mixing_height_night_m=mh,
+        # Treatment-only params are present in `params` only when their
+        # treatment is on; the helper maps them to forward kwargs.
+        kw = _treatment_forward_kwargs(
+            params,
+            mixing_height=config.mixing_height,
+            drainage_box=config.drainage_box,
+            flow_turbulence=config.flow_turbulence,
             mixing_height_day_m=config.mixing_height_day_m,
-            a_ebb=params.get("a_ebb", 0.0),
-            ebb_source_names=(config.ebb_source,),
-            a_flow=params.get("a_flow", 0.0),
-            flow_threshold_m3s=params.get("flow_threshold_m3s", 0.44),
-            drainage_lambda_along_m=params.get("drainage_lambda_along_m"),
-            drainage_lambda_cross_m=params.get("drainage_lambda_cross_m", 500.0),
             drainage_bearing_deg=config.drainage_bearing_deg,
-            box_tau_h=params.get("box_tau_h", 3.0),
+            ebb_source=config.ebb_source,
         )
+        pred = sobol.predict_concentrations(row, param_names, drivers, met, **kw)
         return pred[valid]
 
     # Sobol-informed priors from THIS study's ST indices (not a hardcoded table).
@@ -694,19 +737,20 @@ def mcmc_chain_results(
         include_flow_turbulence=config.flow_turbulence,
     )
     context.log.info(
-        "MCMC chain %s (seed %d): %d obs points, %d fwd params; SMC × %d particles"
-        " | mixing_height=%s fit_obs_sigma=%s drainage_box=%s flow_turbulence=%s (window %s→%s)",
+        "MCMC chain %s (seed %d): %d obs points over %d window(s), %d fwd params;"
+        " SMC × %d particles"
+        " | mixing_height=%s fit_obs_sigma=%s drainage_box=%s flow_turbulence=%s (windows %s)",
         context.partition_key,
         chain_seed,
         obs_flat.size,
+        len(fit_windows),
         len(priors),
         config.n_draws,
         config.mixing_height,
         config.fit_obs_sigma,
         config.drainage_box,
         config.flow_turbulence,
-        config.window_start,
-        config.window_end,
+        fit_windows,
     )
 
     if config.fit_obs_sigma:
@@ -749,6 +793,8 @@ def mcmc_chain_results(
             "drainage_bearing_deg": config.drainage_bearing_deg,
             "ebb_source": config.ebb_source,
             "flow_turbulence": config.flow_turbulence,
+            "extra_windows": [list(w) for w in config.extra_windows],
+            "validation_windows": [list(w) for w in config.validation_windows],
         },
     }
 
@@ -803,11 +849,11 @@ def mcmc_aggregate(
 
     # ----- posterior-predictive skill (best-effort; needs the forward model) -----
     window = cfg.get("window", list(sobol.DEFAULT_WINDOW))
+    fit_windows = [tuple(window), *[tuple(w) for w in cfg.get("extra_windows", [])]]
+    validation_windows = [tuple(w) for w in cfg.get("validation_windows", [])]
     predictive: list[dict[str, Any]] = []
+    held_out: list[dict[str, Any]] = []
     try:
-        df = sobol.load_window(sobol.DEFAULT_PARQUET, (window[0], window[1]))
-        drivers, met, _hours = sobol.make_drivers_and_met(df)
-        obs_mat = sobol.build_obs(df, _hours, sobol.RECEPTOR_NAMES)
         param_names = list(sobol.PARAM_RANGES)
         # Treatment posteriors carry extra params — draw them too and feed
         # them to the treated forward model, else the predictive would
@@ -824,32 +870,38 @@ def mcmc_aggregate(
         n_fwd = len(param_names)
         draws = mcmc.posterior_param_draws(combined, draw_names, n_samples=100)
 
-        def _fwd(vec: np.ndarray) -> np.ndarray:
-            x = dict(zip(extra, vec[n_fwd:], strict=True))
-            db_kw = {}
-            if treat_db:
-                db_kw = {
-                    "a_ebb": float(x["a_ebb"]),
-                    "ebb_source_names": (cfg.get("ebb_source", "Saturn Blvd Bridge"),),
-                    "drainage_lambda_along_m": float(x["drainage_lambda_along_m"]),
-                    "drainage_lambda_cross_m": float(x["drainage_lambda_cross_m"]),
-                    "drainage_bearing_deg": float(cfg.get("drainage_bearing_deg", 280.0)),
-                    "box_tau_h": float(x["box_tau_h"]),
-                }
-            if treat_ft:
-                db_kw["a_flow"] = float(x["a_flow"])
-                db_kw["flow_threshold_m3s"] = float(x["flow_threshold_m3s"])
-                db_kw.setdefault("ebb_source_names", (cfg.get("ebb_source", "Saturn Blvd Bridge"),))
-            return sobol.predict_concentrations(
-                vec[:n_fwd],
-                param_names,
-                drivers,
-                met,
-                mixing_height_night_m=float(x["mixing_height_night_m"]) if treat_mh else None,
-                **db_kw,
-            )
+        def _make_fwd(drivers: list[Any], met: list[Any]):
+            def _fwd(vec: np.ndarray) -> np.ndarray:
+                x = dict(zip(extra, vec[n_fwd:], strict=True))
+                kw = _treatment_forward_kwargs(
+                    x,
+                    mixing_height=treat_mh,
+                    drainage_box=treat_db,
+                    flow_turbulence=treat_ft,
+                    drainage_bearing_deg=float(cfg.get("drainage_bearing_deg", 280.0)),
+                    ebb_source=cfg.get("ebb_source", "Saturn Blvd Bridge"),
+                )
+                return sobol.predict_concentrations(vec[:n_fwd], param_names, drivers, met, **kw)
 
-        predictive = mcmc.predictive_skill(draws, _fwd, obs_mat, sobol.RECEPTOR_NAMES)
+            return _fwd
+
+        # In-sample skill over the pooled fit windows.
+        drivers, met, obs_mat = sobol.load_windows_concat(fit_windows)
+        predictive = mcmc.predictive_skill(
+            draws, _make_fwd(drivers, met), obs_mat, sobol.RECEPTOR_NAMES
+        )
+
+        # Held-out skill: windows the likelihood never saw, scored per window.
+        for vw in validation_windows:
+            try:
+                v_drivers, v_met, v_obs = sobol.load_windows_concat([vw])
+                for row in mcmc.predictive_skill(
+                    draws, _make_fwd(v_drivers, v_met), v_obs, sobol.RECEPTOR_NAMES
+                ):
+                    held_out.append({"window": f"{vw[0]}→{vw[1]}", **row})
+            except Exception as exc:  # score what we can; report the gap
+                context.log.warning("held-out window %s skipped: %s", vw, exc)
+                held_out.append({"window": f"{vw[0]}→{vw[1]}", "error": str(exc)})
     except Exception as exc:  # predictive is a bonus — never fail the report over it
         context.log.warning("posterior-predictive skipped: %s", exc)
 
@@ -876,8 +928,11 @@ def mcmc_aggregate(
         variant += "_drainbox"
     if cfg.get("flow_turbulence"):
         variant += "_flowturb"
+    # Multi-window pooled fits mark the window count so tags stay unique
+    # and self-describing (the full window list lives in diagnostics.json).
+    nwin = f"_{len(fit_windows)}win" if len(fit_windows) > 1 else ""
     tag = (
-        f"{window[0]}_{window[1]}_{n_chains}chains_{n_particles}p"
+        f"{window[0]}_{window[1]}{nwin}_{n_chains}chains_{n_particles}p"
         f"_seed{base_seed}{variant}_{run_date}"
     )
     bucket = os.getenv("DAGSTER_S3_BUCKET")
@@ -904,6 +959,8 @@ def mcmc_aggregate(
         analysis = {
             "tag": tag,
             "window": window,
+            "fit_windows": [list(w) for w in fit_windows],
+            "validation_windows": [list(w) for w in validation_windows],
             "n_chains": n_chains,
             "n_particles": n_particles,
             "base_seed": base_seed,
@@ -912,6 +969,7 @@ def mcmc_aggregate(
             "diagnostics": {k: v for k, v in diag.items() if k != "_summary"},
             "bound_railing": railing,
             "posterior_predictive": predictive,
+            "held_out_predictive": held_out,
         }
         s3c.put_object(
             Bucket=bucket,
@@ -929,14 +987,21 @@ def mcmc_aggregate(
             if predictive
             else "(posterior-predictive not computed)"
         )
+        windows_md = ", ".join(f"{w[0]}→{w[1]}" for w in fit_windows)
+        held_md = (
+            pd.DataFrame(held_out).to_markdown(index=False)
+            if held_out
+            else "(no validation windows configured)"
+        )
         md = (
             f"# MCMC calibration `{tag}`\n\n"
-            f"window **{window[0]} → {window[1]}** | {n_chains} chains × "
+            f"fit window(s) **{windows_md}** | {n_chains} chains × "
             f"{n_particles} particles | base seed {base_seed}\n\n"
             f"**Converged: {converged}** (max Rhat {max_rhat:.4f}, threshold 1.01)\n\n"
             f"## Posterior (94% HDI)\n\n{summ_df.to_markdown(index=False)}\n\n"
             f"## Parameters railing against bounds (widen these)\n\n{rail_md}\n\n"
-            f"## Posterior-predictive skill per receptor\n\n{pred_md}\n"
+            f"## Posterior-predictive skill per receptor (in-sample, pooled)\n\n{pred_md}\n\n"
+            f"## Held-out skill (windows never in the likelihood)\n\n{held_md}\n"
         )
         s3c.put_object(Bucket=bucket, Key=f"{prefix}/summary.md", Body=md.encode())
         archived["summary"] = f"{prefix}/summary.md"
@@ -956,6 +1021,11 @@ def mcmc_aggregate(
                 "n_railing": len(railing),
                 "mean_coverage_94": (
                     float(np.mean([p["coverage_94"] for p in predictive])) if predictive else None
+                ),
+                "held_out_mean_coverage_94": (
+                    float(np.mean([p["coverage_94"] for p in held_out if "coverage_94" in p]))
+                    if any("coverage_94" in p for p in held_out)
+                    else None
                 ),
             },
             artifacts=archived,
@@ -989,6 +1059,11 @@ def mcmc_aggregate(
                 pd.DataFrame(predictive).to_markdown(index=False)
                 if predictive
                 else "(not computed)"
+            ),
+            "held_out_skill": dg.MetadataValue.md(
+                pd.DataFrame(held_out).to_markdown(index=False)
+                if held_out
+                else "(no validation windows)"
             ),
             "archived": dg.MetadataValue.md(
                 "\n".join(f"- `{k}`: `{v}`" for k, v in archived.items()) or "(no S3 archive)"
@@ -1043,8 +1118,30 @@ def cv_fold_results(
 
     param_names = list(sobol.PARAM_RANGES)
 
-    def fwd(row: np.ndarray) -> np.ndarray:
-        return sobol.predict_concentrations(row, param_names, drivers, met)
+    # Same treatment gating as mcmc_chain_results, so CV can validate the
+    # treatment model — not just the baseline.
+    priors = mcmc.build_priors(
+        sobol_indices=None,
+        include_mixing_height=config.mixing_height,
+        include_drainage_box=config.drainage_box,
+        include_flow_turbulence=config.flow_turbulence,
+    )
+    extra = [p for p in priors if p not in sobol.PARAM_RANGES]
+    draw_names = [*param_names, *extra]
+    n_fwd = len(param_names)
+
+    def fwd(vec: np.ndarray) -> np.ndarray:
+        x = dict(zip(extra, vec[n_fwd:], strict=True))
+        kw = _treatment_forward_kwargs(
+            x,
+            mixing_height=config.mixing_height,
+            drainage_box=config.drainage_box,
+            flow_turbulence=config.flow_turbulence,
+            mixing_height_day_m=config.mixing_height_day_m,
+            drainage_bearing_deg=config.drainage_bearing_deg,
+            ebb_source=config.ebb_source,
+        )
+        return sobol.predict_concentrations(vec[:n_fwd], param_names, drivers, met, **kw)
 
     # --- fit on TRAIN (holdout hours masked out of the likelihood) ---
     train_obs = obs_mat.copy()
@@ -1054,17 +1151,16 @@ def cv_fold_results(
         return {"event": event, "status": "skipped: no training observations"}
 
     def forward_train(params: dict[str, float]) -> np.ndarray:
-        row = np.array([params[p] for p in param_names], dtype=float)
-        return fwd(row)[valid_train]
+        vec = np.array([params[p] for p in draw_names], dtype=float)
+        return fwd(vec)[valid_train]
 
-    priors = mcmc.build_priors(sobol_indices=None)
     model = mcmc.build_model(
         train_obs[valid_train], forward_train, priors, obs_sigma=config.obs_sigma
     )
     idata = mcmc.sample_posterior(model, n_chains=1, n_draws=config.n_draws, seed=config.seed)
 
     # --- predict: held-out (test) vs in-sample (train) ---
-    draws = mcmc.posterior_param_draws(idata, param_names, n_samples=100)
+    draws = mcmc.posterior_param_draws(idata, draw_names, n_samples=100)
     test_obs = np.where(holdout[:, None], obs_mat, np.nan)
     train_only = np.where(holdout[:, None], np.nan, obs_mat)
     test_skill = mcmc.predictive_skill(draws, fwd, test_obs, sobol.RECEPTOR_NAMES)
@@ -1078,6 +1174,9 @@ def cv_fold_results(
         "holdout": [hs, he],
         "n_particles": config.n_draws,
         "seed": config.seed,
+        "mixing_height": config.mixing_height,
+        "drainage_box": config.drainage_box,
+        "flow_turbulence": config.flow_turbulence,
         "train_skill": train_skill,
         "test_skill": test_skill,
     }

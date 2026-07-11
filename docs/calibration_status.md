@@ -32,6 +32,55 @@ search — it is in fact our primary, best-fit receptor.)
 
 ---
 
+## 2026-07-11 — multi-window campaign design (windows locked; machinery wired)
+
+**Plan** (approved): calibrate the drainage-box model **jointly across
+windows with regime contrast**, validate on windows the fit never saw.
+Rationale: `a_flow` is degenerate in any constant-flow window, and the
+tide-ebb signal aliases the 12 h night cycle in a single 3-day window.
+
+**Machinery** (this commit): `McmcConfig.extra_windows` pools additional
+windows into ONE likelihood (`sobol.load_windows_concat` — per-window
+tide gradients, exact concatenation; single window reproduces the old
+path byte-identically). `McmcConfig.validation_windows` makes the
+aggregate score posterior-predictive skill on held-out windows (new
+"Held-out skill" table in summary.md + `held_out_predictive` in
+diagnostics.json; tag gains `_Nwin`). `cv_fold_results` now honors the
+treatment flags (it was baseline-only). Shared
+`_treatment_forward_kwargs` helper replaces three copies of the
+treatment→forward mapping. Window scanner:
+`nrp/scripts/select_windows.py`.
+
+**Windows locked** (from the scan; SAN YSIDRO has coverage gaps through
+much of 2025 — chosen windows avoid the holes):
+
+Calibration (pooled fit):
+1. **2026-03-13→16** — anchor: strongest calm-night signal (149.7 ppb),
+   full coverage; flow static (tide/drainage identified here).
+2. **2025-05-18→21** — calm-night 120 ppb, full 3-receptor coverage,
+   flow 0.99–1.50 m³/s.
+3. **2025-05-10→13** — calm-night 113 ppb, flow 0.03–0.96 m³/s —
+   **spans the 0.44 m³/s threshold**, the key `a_flow` identifier.
+4. **2025-11-12→15** — storm window, flow 0.10–140 m³/s, moderate
+   signal (calm-night 16–23 ppb): pins the high-flow end and penalizes
+   an over-eager flow term (observed H₂S is NOT huge at 140 m³/s).
+
+Validation (never in the likelihood):
+- **2026-04-19→22** — strong event (calm-night 139 ppb), the honest
+  skill test.
+- **2025-10-15→18** — storm, LOW signal (3.4 ppb calm-night): tests
+  that the model doesn't hallucinate flow-driven emission.
+- **2026-02-08→11** — existing CV event window.
+
+NRP ask (user action): raise non-exempt concurrent-pod cap 4 → **16**
+for `ucsd-center4health` (draft message in the approved plan file).
+GPU: not useful for SMC with a Python black-box forward — scale-out on
+CPU pods is the lever.
+
+**Next**: after the single-window drainage-box result + NRP grant:
+image rebuild/pin → per-window fits (stability) → pooled 4-window fit
+with `validation_windows` set → event CV with treatment flags.
+
 ## 2026-07-11 — reference: Pankow et al. 2006 (stream VOC source apportionment / transfer physics)
 
 **Source**: Pankow, J.F., Asher, W.E., Zogorski, J.S. "Source

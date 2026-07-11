@@ -271,6 +271,32 @@ def make_drivers_and_met(
     return drivers, met, pd.DatetimeIndex(hours)
 
 
+def load_windows_concat(
+    windows: list[tuple[str, str]],
+    parquet_path: Path = DEFAULT_PARQUET,
+) -> tuple[list[EmissionDrivers], list[MetSpec], np.ndarray]:
+    """Load several fit windows and concatenate their hourly series.
+
+    Each window is loaded independently — per-window quantities (the
+    tide-rate gradient in :func:`make_drivers_and_met`) never bleed across
+    the gap between windows — then the driver/met lists and obs matrices
+    are concatenated along time. The forward pass is per-hour, so a pooled
+    likelihood over the concatenation is exact. A single window reproduces
+    the ``load_window`` → ``make_drivers_and_met`` → ``build_obs`` path
+    byte-identically.
+    """
+    all_drivers: list[EmissionDrivers] = []
+    all_met: list[MetSpec] = []
+    all_obs: list[np.ndarray] = []
+    for ws, we in windows:
+        df = load_window(parquet_path, (ws, we))
+        drivers, met, hours = make_drivers_and_met(df)
+        all_drivers.extend(drivers)
+        all_met.extend(met)
+        all_obs.append(build_obs(df, hours, RECEPTOR_NAMES))
+    return all_drivers, all_met, np.vstack(all_obs)
+
+
 def build_obs(df_window: pd.DataFrame, hours: pd.DatetimeIndex, names: list[str]) -> np.ndarray:
     """(n_hours, n_receptors) observed H2S; NaN where missing."""
     obs = np.full((len(hours), len(names)), np.nan)

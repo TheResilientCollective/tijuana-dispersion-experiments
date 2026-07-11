@@ -207,6 +207,14 @@ class McmcConfig(dg.Config):
     mixing_height_day_m: float = 1500.0
     fit_obs_sigma: bool = False
     sigma_prior_scale: float = 30.0
+    # Drainage-box treatment (calibration_status.md 2026-07-11, Saturn Blvd
+    # culvert mechanism). Off => baseline unchanged. On => 4 extra fitted
+    # params (a_ebb, drainage_lambda_along_m, drainage_lambda_cross_m,
+    # box_tau_h); the bearing and the ebb source stay fixed (identified by
+    # field knowledge, not fitted).
+    drainage_box: bool = False
+    drainage_bearing_deg: float = 280.0
+    ebb_source: str = "Saturn Blvd Bridge"
 
 
 @dg.asset(
@@ -651,7 +659,7 @@ def mcmc_chain_results(
     def forward_model_fn(params: dict[str, float]) -> np.ndarray:
         """Concrete param dict → predicted concentrations at the valid obs points."""
         row = np.array([params[n] for n in param_names], dtype=float)
-        # mixing_height_night_m is present only in the treatment param set.
+        # Treatment-only params are present only when their treatment is on.
         mh = params.get("mixing_height_night_m")
         pred = sobol.predict_concentrations(
             row,
@@ -660,6 +668,12 @@ def mcmc_chain_results(
             met,
             mixing_height_night_m=mh,
             mixing_height_day_m=config.mixing_height_day_m,
+            a_ebb=params.get("a_ebb", 0.0),
+            ebb_source_names=(config.ebb_source,),
+            drainage_lambda_along_m=params.get("drainage_lambda_along_m"),
+            drainage_lambda_cross_m=params.get("drainage_lambda_cross_m", 500.0),
+            drainage_bearing_deg=config.drainage_bearing_deg,
+            box_tau_h=params.get("box_tau_h", 3.0),
         )
         return pred[valid]
 
@@ -670,10 +684,11 @@ def mcmc_chain_results(
     priors = mcmc.build_priors(
         sobol_indices=sobol_indices,
         include_mixing_height=config.mixing_height,
+        include_drainage_box=config.drainage_box,
     )
     context.log.info(
         "MCMC chain %s (seed %d): %d obs points, %d fwd params; SMC × %d particles"
-        " | mixing_height=%s fit_obs_sigma=%s (window %s→%s)",
+        " | mixing_height=%s fit_obs_sigma=%s drainage_box=%s (window %s→%s)",
         context.partition_key,
         chain_seed,
         obs_flat.size,
@@ -681,6 +696,7 @@ def mcmc_chain_results(
         config.n_draws,
         config.mixing_height,
         config.fit_obs_sigma,
+        config.drainage_box,
         config.window_start,
         config.window_end,
     )
@@ -721,6 +737,9 @@ def mcmc_chain_results(
             "n_obs": int(obs_flat.size),
             "mixing_height": config.mixing_height,
             "fit_obs_sigma": config.fit_obs_sigma,
+            "drainage_box": config.drainage_box,
+            "drainage_bearing_deg": config.drainage_bearing_deg,
+            "ebb_source": config.ebb_source,
         },
     }
 
@@ -781,18 +800,37 @@ def mcmc_aggregate(
         drivers, met, _hours = sobol.make_drivers_and_met(df)
         obs_mat = sobol.build_obs(df, _hours, sobol.RECEPTOR_NAMES)
         param_names = list(sobol.PARAM_RANGES)
-        # In the mixing-height treatment the posterior also carries
-        # mixing_height_night_m — draw it too and feed it to the lidded plume,
-        # else the predictive would ignore the very effect we're testing.
+        # Treatment posteriors carry extra params — draw them too and feed
+        # them to the treated forward model, else the predictive would
+        # ignore the very effect being tested.
         treat_mh = bool(cfg.get("mixing_height", False))
-        draw_names = [*param_names, "mixing_height_night_m"] if treat_mh else param_names
+        treat_db = bool(cfg.get("drainage_box", False))
+        extra = (["mixing_height_night_m"] if treat_mh else []) + (
+            list(mcmc.DRAINAGE_BOX_PRIOR_RANGES) if treat_db else []
+        )
+        draw_names = [*param_names, *extra]
         n_fwd = len(param_names)
         draws = mcmc.posterior_param_draws(combined, draw_names, n_samples=100)
 
         def _fwd(vec: np.ndarray) -> np.ndarray:
-            mh = float(vec[n_fwd]) if treat_mh else None
+            x = dict(zip(extra, vec[n_fwd:], strict=True))
+            db_kw = {}
+            if treat_db:
+                db_kw = {
+                    "a_ebb": float(x["a_ebb"]),
+                    "ebb_source_names": (cfg.get("ebb_source", "Saturn Blvd Bridge"),),
+                    "drainage_lambda_along_m": float(x["drainage_lambda_along_m"]),
+                    "drainage_lambda_cross_m": float(x["drainage_lambda_cross_m"]),
+                    "drainage_bearing_deg": float(cfg.get("drainage_bearing_deg", 280.0)),
+                    "box_tau_h": float(x["box_tau_h"]),
+                }
             return sobol.predict_concentrations(
-                vec[:n_fwd], param_names, drivers, met, mixing_height_night_m=mh
+                vec[:n_fwd],
+                param_names,
+                drivers,
+                met,
+                mixing_height_night_m=float(x["mixing_height_night_m"]) if treat_mh else None,
+                **db_kw,
             )
 
         predictive = mcmc.predictive_skill(draws, _fwd, obs_mat, sobol.RECEPTOR_NAMES)
@@ -818,6 +856,8 @@ def mcmc_aggregate(
         variant += "_mhlid"
     if cfg.get("fit_obs_sigma"):
         variant += "_fitsig"
+    if cfg.get("drainage_box"):
+        variant += "_drainbox"
     tag = (
         f"{window[0]}_{window[1]}_{n_chains}chains_{n_particles}p"
         f"_seed{base_seed}{variant}_{run_date}"

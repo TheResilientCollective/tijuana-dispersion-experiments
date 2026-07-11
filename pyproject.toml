@@ -41,7 +41,7 @@ service = [
     # Pinned to the feat/mixing-height branch commit (adds the optional
     # mixing-height lid to the plume; v0.4.0-compatible). Repoint to a tag
     # once the branch merges. See docs/mixing_height_experiment.md.
-    "tijuana-dispersion @ git+https://github.com/theresilientcollective/tijuana-dispersion.git@73161d9",
+    "tijuana-dispersion @ git+https://github.com/theresilientcollective/tijuana-dispersion.git@03bf5d5",
 ]
 dev = [
     "pytest>=8.0,<9.0",

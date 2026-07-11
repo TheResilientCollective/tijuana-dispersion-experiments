@@ -252,6 +252,18 @@ def make_drivers_and_met(
             ),
         )
         hours.append(row["hour"])
+
+    # Tide tendency d(tide)/dt (m/h) for the tide-ebb culvert term
+    # (calibration_status.md 2026-07-11): a single row can't know its
+    # neighbours, so compute the gradient across the assembled series.
+    # Hour gaps are rare in this record; np.gradient over the index is a
+    # per-hour rate to first order. Default 0.0 keeps f_tide_ebb inert.
+    if len(drivers) >= 2:
+        tide = np.array([d.tide_height_m for d in drivers])
+        t_h = np.array([h.timestamp() for h in hours]) / 3600.0
+        rate = np.gradient(tide, t_h)
+        for d, r in zip(drivers, rate, strict=True):
+            d.tide_rate_m_h = float(r)
     return drivers, met, pd.DatetimeIndex(hours)
 
 
@@ -274,6 +286,12 @@ def predict_concentrations(
     *,
     mixing_height_night_m: float | None = None,
     mixing_height_day_m: float = 1500.0,
+    a_ebb: float = 0.0,
+    ebb_source_names: tuple[str, ...] = ("Saturn Blvd Bridge",),
+    drainage_lambda_along_m: float | None = None,
+    drainage_lambda_cross_m: float = 500.0,
+    drainage_bearing_deg: float = 280.0,
+    box_tau_h: float = 3.0,
 ) -> np.ndarray:
     """Run the ``tijuana_dispersion`` forward model for one parameter vector.
 
@@ -289,12 +307,21 @@ def predict_concentrations(
     height on nights (``is_night``) and ``mixing_height_day_m`` on days, so
     the plume reflects off a nocturnal boundary layer. ``None`` (default)
     keeps the original unbounded plume — the baseline path is untouched.
+
+    Drainage-box treatment (calibration_status.md 2026-07-11, Saturn Blvd
+    culvert mechanism): ``a_ebb`` enables the tide-ebb enhancement on
+    ``ebb_source_names`` (needs ``tide_rate_m_h`` on the drivers — set by
+    :func:`make_drivers_and_met`); ``drainage_lambda_along_m`` switches the
+    calm-night stagnation box to the receptor-dependent drainage kernel
+    (bearing ≈ 280°, the down-valley flow direction). Defaults (0.0/None)
+    leave both off — baseline path byte-identical.
     """
     from tijuana_dispersion import (
         EmissionParameters,
         EmissionsModel,
         ForwardRunRequest,
         SourceSpec,
+        StagnationBoxSpec,
         run_forward,
     )
 
@@ -316,8 +343,22 @@ def predict_concentrations(
             "spill": 1.0,
         },
         baselines_g_s={loc.name: s["baseline_scale"] for loc in locations},
+        a_ebb=a_ebb,
+        ebb_source_names=ebb_source_names if a_ebb > 0.0 else (),
     )
     em = EmissionsModel(params)
+
+    # Optional receptor-dependent drainage box for the stagnation hours.
+    stagnation_box = (
+        StagnationBoxSpec(
+            lambda_m=drainage_lambda_along_m,
+            drainage_bearing_deg=drainage_bearing_deg,
+            lambda_cross_m=drainage_lambda_cross_m,
+            tau_h=box_tau_h,
+        )
+        if drainage_lambda_along_m is not None
+        else None
+    )
 
     # Optional mixing-height lid: build per-hour MetSpec copies with the
     # nocturnal/daytime lid set. None => use met unchanged (baseline).
@@ -351,6 +392,7 @@ def predict_concentrations(
                 receptors=receptors,
                 meteorology=[met[t_idx]],
                 units="ppb",
+                stagnation_box=stagnation_box,
             ),
         )
         pred[t_idx] = np.asarray(res.concentrations)[0]

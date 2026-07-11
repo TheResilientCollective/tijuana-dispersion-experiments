@@ -2849,8 +2849,8 @@ wheels = [
 
 [[package]]
 name = "tijuana-dispersion"
-version = "0.3.0"
-source = { git = "https://github.com/theresilientcollective/tijuana-dispersion.git?rev=73161d9#73161d9de8d321bf0200ae03b4e8725ca23d8d54" }
+version = "0.4.0"
+source = { git = "https://github.com/theresilientcollective/tijuana-dispersion.git?rev=03bf5d5#03bf5d59a6828d578ccae2a27ae82577a8583914" }
 dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
@@ -2931,7 +2931,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6,<1.0" },
     { name = "salib", specifier = ">=1.5,<2.0" },
     { name = "scipy", specifier = ">=1.12,<2.0" },
-    { name = "tijuana-dispersion", marker = "extra == 'service'", git = "https://github.com/theresilientcollective/tijuana-dispersion.git?rev=73161d9" },
+    { name = "tijuana-dispersion", marker = "extra == 'service'", git = "https://github.com/theresilientcollective/tijuana-dispersion.git?rev=03bf5d5" },
 ]
 provides-extras = ["service", "dev"]
 

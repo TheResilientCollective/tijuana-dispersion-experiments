@@ -52,10 +52,25 @@ class PriorSpec:
     bounds: tuple[float, float] | None = None  # (low, high) truncation for normal
 
 
+#: Priors for the drainage-box treatment (calibration_status.md
+#: 2026-07-11). a_ebb up to 300: the forward validation needed 40-100 to
+#: approach the observed NESTOR/SY ratio, so leave headroom without
+#: letting the bound do the fitting. lambda ranges bracket the valley
+#: dimensions (channel chain ~6 km long, ~1 km wide); tau brackets a
+#: plausible calm-night residence time.
+DRAINAGE_BOX_PRIOR_RANGES: dict[str, tuple[float, float]] = {
+    "a_ebb": (0.0, 300.0),
+    "drainage_lambda_along_m": (1000.0, 16000.0),
+    "drainage_lambda_cross_m": (100.0, 3000.0),
+    "box_tau_h": (0.5, 12.0),
+}
+
+
 def build_priors(
     sobol_indices: pd.DataFrame | None = None,
     include_mixing_height: bool = False,
     mixing_height_range: tuple[float, float] = (50.0, 500.0),
+    include_drainage_box: bool = False,
 ) -> dict[str, PriorSpec]:
     """Build prior specs, Sobol-informed when indices are supplied.
 
@@ -103,6 +118,10 @@ def build_priors(
             low=lo,
             high=hi,
         )
+
+    if include_drainage_box:
+        for name, (lo, hi) in DRAINAGE_BOX_PRIOR_RANGES.items():
+            priors[name] = PriorSpec(name=name, dist_type="uniform", low=lo, high=hi)
 
     return priors
 

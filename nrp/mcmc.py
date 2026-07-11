@@ -58,11 +58,15 @@ class PriorSpec:
 #: letting the bound do the fitting. lambda ranges bracket the valley
 #: dimensions (channel chain ~6 km long, ~1 km wide); tau brackets a
 #: plausible calm-night residence time.
+#: Widened 2026-07-11 after the first drainage-box posterior railed at
+#: a_ebb=300 and pushed lambda_cross/tau against their ceilings (see
+#: calibration_status.md); lambda_along was cleanly interior (~2 km) so
+#: its range is unchanged.
 DRAINAGE_BOX_PRIOR_RANGES: dict[str, tuple[float, float]] = {
-    "a_ebb": (0.0, 300.0),
+    "a_ebb": (0.0, 1000.0),
     "drainage_lambda_along_m": (1000.0, 16000.0),
-    "drainage_lambda_cross_m": (100.0, 3000.0),
-    "box_tau_h": (0.5, 12.0),
+    "drainage_lambda_cross_m": (100.0, 6000.0),
+    "box_tau_h": (0.5, 24.0),
 }
 
 #: Priors for the flow-turbulence term (Frobenius et al. 2026: hotspot

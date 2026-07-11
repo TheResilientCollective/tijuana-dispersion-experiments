@@ -32,6 +32,45 @@ search — it is in fact our primary, best-fit receptor.)
 
 ---
 
+## 2026-07-11 — lid_forward_sweep (mixing-height hypothesis killed at the physics level)
+
+**Question**: At fixed emissions (baseline posterior means), does the
+nocturnal lid actually amplify predictions during NESTOR's night hours —
+i.e., could the MCMC treatment (below) have failed only because free
+`obs_sigma` out-competed the lid?
+
+**Result**: No — **the lid is essentially inert for this source–receptor
+geometry**. Local forward sweep, `L_night` ∈ {None, 50, 100, 200, 400} m,
+Mar 13–16 window (72 h, 38 nocturnal):
+- NESTOR night-mean prediction: 22.5 ppb unbounded → 27.3 at L=50 m
+  (**1.21×**), 23.0 at L=100, **1.00× at L≥200**. Needed: **3.2×**
+  (night obs mean 71.9). SAN YSIDRO/IB behave the same (≤1.11×/1.32× at
+  the extreme L=50, inert by L=200).
+- Why: the lid only bites when σz approaches L. Nocturnal stability here
+  is Pasquill D(25)/E(7)/F(6 hours) (night winds median 3.2 m/s), and
+  Briggs-rural σz at receptor distances is **7–103 m** — far below even a
+  200 m lid. The posterior's inability to identify `L_night` was correct:
+  the likelihood is genuinely flat in it.
+
+**State change**: The nocturnal mixing-lid hypothesis (open since
+2026-05-12, motivated 5–10× amplification) is **dead as the explanation
+for NESTOR's 3.4× under-prediction** — not confounded, not under-sampled;
+the plume physics cannot deliver the enhancement at these σz. Do NOT
+spend an MCMC on the σ-fixed lid re-run; the sweep already bounds its
+effect at ≤1.2×. The missing factor of ~3 at NESTOR nights must come from
+elsewhere: (a) emissions timing/magnitude at night (diel modifier shape),
+(b) a missing source near NESTOR, (c) met representativeness on calm
+nights (night winds down to 0.2 m/s; the logged "+125 ppb on S-wind calm
+hours"), or (d) the σ-scheme itself (Briggs rural may over-dilute in
+stable urban terrain — a *smaller* σz at night would raise concentrations
+without any lid).
+
+**Next**: Cheapest first: (1) forward sensitivity of NESTOR night bias to
+the σz scheme (e.g., urban McElroy–Pooler or a stability-class shift
+D→E/F) — same sweep harness, no MCMC; (2) check NERR (TJRTLMET) winds vs
+Open-Meteo for the calm-night hours (open question since 2026-05-05);
+(3) if neither closes the gap, revisit source inventory near NESTOR.
+
 ## 2026-07-10 — mixing_height_treatment (lid + per-receptor obs_sigma; negative, confounded)
 
 **Question**: Does adding a nocturnal mixing lid (`mixing_height_night_m`,

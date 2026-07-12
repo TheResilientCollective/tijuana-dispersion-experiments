@@ -122,14 +122,15 @@ _AGGREGATOR_K8S_TAGS = {
 
 # MCMC runs ONE SMC chain per partition/pod (see mcmc_chain_results), so
 # each pod is single-process (cores=1) and gets the full memory to itself —
-# no cross-chain contention. This is what fixed the 8Gi OOM that hit when
-# 4 chains shared one pod. 8Gi is generous headroom for a single chain.
+# no cross-chain contention. 8Gi was generous for a single-window chain
+# (216 obs) but the pooled 4-window fit (855 obs, 17 params) peaks past it
+# (OOMKilled 2026-07-11); 16Gi gives multi-window chains ~2x headroom.
 _MCMC_K8S_TAGS = {
     "dagster-k8s/config": {
         "container_config": {
             "resources": {
-                "requests": {"cpu": "1", "memory": "2Gi"},
-                "limits": {"cpu": "2", "memory": "8Gi"},
+                "requests": {"cpu": "1", "memory": "8Gi"},
+                "limits": {"cpu": "2", "memory": "16Gi"},
             },
         },
     },

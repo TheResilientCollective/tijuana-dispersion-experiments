@@ -123,14 +123,15 @@ _AGGREGATOR_K8S_TAGS = {
 # MCMC runs ONE SMC chain per partition/pod (see mcmc_chain_results), so
 # each pod is single-process (cores=1) and gets the full memory to itself —
 # no cross-chain contention. 8Gi was generous for a single-window chain
-# (216 obs) but the pooled 4-window fit (855 obs, 17 params) peaks past it
-# (OOMKilled 2026-07-11); 16Gi gives multi-window chains ~2x headroom.
+# (216 obs) but pooled 4-window chains (855 obs, 17 params) were observed
+# at 12.5Gi mid-run at 500 particles (OOMKilled at 8Gi 2026-07-11; 16Gi
+# marginal 2026-07-13). 32Gi covers the SMC stage-history growth.
 _MCMC_K8S_TAGS = {
     "dagster-k8s/config": {
         "container_config": {
             "resources": {
-                "requests": {"cpu": "1", "memory": "8Gi"},
-                "limits": {"cpu": "2", "memory": "16Gi"},
+                "requests": {"cpu": "1", "memory": "12Gi"},
+                "limits": {"cpu": "2", "memory": "32Gi"},
             },
         },
     },

@@ -91,6 +91,8 @@ In build_index asset:
   s3_client.put_object(Bucket=bucket, Key="site/index.html", Body=html.encode())
 """
 
+from __future__ import annotations
+
 import json
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any

@@ -1,4 +1,4 @@
-.PHONY: help docker-login docker-build docker-push docker-build-push docker-digest docker-clean docker-tags
+.PHONY: help docker-login docker-build docker-build-hysplit docker-push docker-build-push docker-digest docker-clean docker-tags
 
 # NRP worker image — build on Apple Silicon, push to the NRP GitLab registry.
 #
@@ -20,6 +20,8 @@ GIT_SHA := $(shell git rev-parse --short HEAD)
 
 IMAGE_TAG_SHA := $(REGISTRY)/$(ORG)/$(IMAGE):$(GIT_SHA)
 IMAGE_TAG_DEV := $(REGISTRY)/$(ORG)/$(IMAGE):dev
+IMAGE_TAG_HYSPLIT_SHA := $(REGISTRY)/$(ORG)/$(IMAGE):$(GIT_SHA)-hysplit
+IMAGE_TAG_HYSPLIT_DEV := $(REGISTRY)/$(ORG)/$(IMAGE):dev-hysplit
 
 # Source GitLab creds from nrp/.env; resolve GH_TOKEN from gh if unset. Used as a
 # prefix inside every recipe that talks to Docker so login + push share one shell
@@ -61,6 +63,25 @@ docker-build:
 			-t $(IMAGE_TAG_DEV) \
 			. ; \
 		echo "Built + tagged: $(IMAGE_TAG_SHA) , :dev"'
+
+# worker + HYSPLIT binaries (saturn_nestor_job). Requires the license-gated
+# tarball at build/hysplit.v5.4.2_x86_64.tar.gz (gitignored) — see nrp/Dockerfile.
+docker-build-hysplit:
+	@bash -c '$(LOAD_ENV) \
+		: "$${GH_TOKEN:?no GH_TOKEN — run: gh auth login}"; \
+		if [ ! -f build/hysplit.v5.4.2_x86_64.tar.gz ]; then \
+			echo "✗ build/hysplit.v5.4.2_x86_64.tar.gz missing (license-gated; copy it in first)"; exit 1; \
+		fi; \
+		echo "Building $(IMAGE_TAG_HYSPLIT_SHA) (--platform linux/amd64)..."; \
+		DOCKER_BUILDKIT=1 docker build \
+			-f nrp/Dockerfile \
+			--platform linux/amd64 \
+			--target worker-hysplit \
+			--secret id=gh_token,env=GH_TOKEN \
+			-t $(IMAGE_TAG_HYSPLIT_SHA) \
+			-t $(IMAGE_TAG_HYSPLIT_DEV) \
+			. ; \
+		echo "Built + tagged: $(IMAGE_TAG_HYSPLIT_SHA) , :dev-hysplit"'
 
 # Login AND push in the SAME shell — the Docker Desktop keychain helper can drop
 # a credential written by a prior shell ("context deadline exceeded"), which is

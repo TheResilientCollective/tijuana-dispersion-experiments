@@ -66,3 +66,31 @@ CMD ["dagster-daemon", "run"]
 FROM base AS worker
 COPY nrp/scripts/with_gh_auth.sh /tmp/with_gh_auth.sh
 RUN --mount=type=secret,id=gh_token sh /tmp/with_gh_auth.sh && rm /tmp/with_gh_auth.sh
+
+# ---- HYSPLIT binaries (saturn_nestor workload) ----------------------
+# The tarball is license-gated and NOT in git (build/ is gitignored):
+#   cp /path/to/hysplit.v5.4.2_x86_64.tar.gz build/
+# BuildKit prunes unused stages, so --target base|worker builds stay
+# tarball-free. Modeled on tj_h2s_prediction/build/Dockerfile_hysplit_worker.
+FROM debian:trixie-slim AS hysplit-builder
+ARG HYSPLIT_ARCHIVE=hysplit.v5.4.2_x86_64.tar.gz
+COPY build/${HYSPLIT_ARCHIVE} /tmp/hysplit.tar.gz
+RUN set -eux; \
+    mkdir -p /opt/hysplit; \
+    tar -xzf /tmp/hysplit.tar.gz --strip-components=1 -C /opt/hysplit; \
+    find /opt/hysplit -type f \( -name "*.o" -o -name "*.a" \) -delete; \
+    rm -f /tmp/hysplit.tar.gz
+
+# ---- worker + HYSPLIT: the image for saturn_nestor_job pods ---------
+# Runtime libs per the tj reference image; verify the netcdf/proj package
+# names if the python base image moves to a different Debian release.
+FROM worker AS worker-hysplit
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libnetcdff7 netcdf-bin libproj25 proj-data proj-bin tini \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=hysplit-builder /opt/hysplit /opt/hysplit
+ENV HYSPLIT_PATH=/opt/hysplit/exec \
+    HYSPLIT_METEO_DIR=/data/hysplit/meteo \
+    HYSPLIT_WORKING_DIR=/data/hysplit/work
+RUN mkdir -p /data/hysplit/meteo /data/hysplit/work \
+    && test -x /opt/hysplit/exec/hycs_std

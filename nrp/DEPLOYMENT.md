@@ -351,7 +351,66 @@ status and archive tag — copy the tags into `fetch_sobol_results.py
   multi-partition backfills. Use the GraphQL API via
   `nrp/scripts/_submit_backfill.py`.
 
-## 8. Teardown
+## 8. Saturn→Nestor HYSPLIT workload (`saturn_nestor_job`)
+
+Single-source (Saturn Blvd Bridge) / single-receptor (NESTOR-BES) back +
+forward H2S calculation. Science in `nrp/saturn_nestor.py`, assets in
+`nrp/saturn_assets.py`; results archive to `s3://<bucket>/runs/hysplit/{tag}/`
+and appear in the `build_index` ledger.
+
+### 8a. Image — HYSPLIT is baked into a dedicated stage
+
+The HYSPLIT v5.4.2 tarball is **license-gated and not in git**. Get it from
+the project's resilient MinIO (or `GeoDemic/backend/`), place it, build:
+
+```bash
+cp /path/to/hysplit.v5.4.2_x86_64.tar.gz build/
+make docker-build-hysplit          # --target worker-hysplit, :<sha>-hysplit tag
+```
+
+`--target base|worker` builds remain tarball-free (BuildKit prunes the
+hysplit stages). Pin the `-hysplit` digest in `nrp/.env` `DAGSTER_IMAGE`
+when running this workload on the cluster.
+
+### 8b. Meteorology — sizes and staging
+
+Met comes from the NOAA ARL AWS Open Data archive
+(`s3://noaa-oar-arl-hysplit-pds`, anonymous), fetched on demand by
+`nrp/metfetch.py`:
+
+- **hrrr** (default, 3 km): 6-h chunks of **~3.4 GB** → ~51 GB for the
+  default 3-day window + 12 h reach. Mount a CephFS **RWX PVC** at
+  `HYSPLIT_METEO_DIR` (200–500 GB) so pods share one copy — do NOT rely on
+  ephemeral storage for HRRR.
+- **gdas1** (1°, smoke tests): ~600 MB/week file.
+
+Resolution chain per file: pre-seeded met dir → optional NRP Ceph S3 mirror
+(`MET_MIRROR_ENDPOINT/BUCKET/KEY/SECRET`, pull-through AWS→mirror→pod) →
+OSDF/pelican (`/aws-opendata/us-east-1` namespace, opportunistic) → direct
+AWS HTTPS. A manually staged higher-resolution dataset (e.g. the 1 km Globus
+archive) in the met dir wins automatically.
+
+### 8c. Run
+
+```bash
+# Local smoke (inside the worker-hysplit container; gdas1 = small met):
+mkdir -p met
+docker run --rm -v "$PWD/met":/data/hysplit/meteo -v "$PWD/.dagster_io":/app/.dagster_io \
+  <image>:dev-hysplit \
+  dagster asset materialize -m nrp.definitions \
+    --select 'saturn_backward_footprint,saturn_inferred_emissions,saturn_forward_verification' \
+    --config-json '{"ops": {"saturn_backward_footprint": {"config": {"met_source": "gdas1"}},
+                    "saturn_inferred_emissions": {"config": {"met_source": "gdas1"}},
+                    "saturn_forward_verification": {"config": {"met_source": "gdas1"}}}}'
+
+# Cluster: uv run dg launch --job saturn_nestor_job   (or the Dagster UI)
+```
+
+First-run checks (one-time): confirm the concentration grid in `MESSAGE`
+matches center 32.5632/-117.0918, 0.005° spacing, 0.20° span; and validate
+the EMITIMES header against a sample in `/opt/hysplit/testing/`.
+
+## 9. Teardown
 
 ```bash
 helm uninstall dagster -n ucsd-center4health

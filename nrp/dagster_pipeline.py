@@ -56,6 +56,12 @@ from nrp.runstore import RunManifest, write_manifest
 
 from . import sobol
 from .resources import SlackWebhookResource
+from .saturn_assets import (
+    saturn_backward_footprint,
+    saturn_forward_verification,
+    saturn_inferred_emissions,
+    saturn_nestor_job,
+)
 
 log = logging.getLogger(__name__)
 
@@ -781,7 +787,7 @@ sobol_aggregate_job = dg.define_asset_job(
 
 
 defs = dg.Definitions(
-    jobs=[sobol_aggregate_job],
+    jobs=[sobol_aggregate_job, saturn_nestor_job],
     assets=[
         sobol_chunk_results,
         sobol_aggregate,
@@ -790,6 +796,9 @@ defs = dg.Definitions(
         mcmc_aggregate,
         cv_fold_results,
         cv_aggregate,
+        saturn_backward_footprint,
+        saturn_inferred_emissions,
+        saturn_forward_verification,
     ],
     sensors=[
         nrp_run_failure_to_slack,

@@ -36,6 +36,20 @@ serviceAccount:
 # partitioned materialization does not execute.
 dagsterDaemon:
   enabled: true
+  # NRP nodes are preemptible and reclaim RUN-WORKER pods too, not just
+  # step pods (2026-07-13: a node sweep killed all 8 pooled-fit run
+  # workers; run monitoring marked the runs FAILED while their step jobs
+  # kept sampling as orphans). maxResumeRunAttempts lets the monitoring
+  # daemon relaunch the run worker, which re-adopts in-flight steps.
+  runMonitoring:
+    enabled: true
+    startTimeoutSeconds: 300
+    maxResumeRunAttempts: 3
+    pollIntervalSeconds: 120
+  # Failed runs also get one automatic full retry as a safety net.
+  runRetries:
+    enabled: true
+    maxRetries: 1
   resources:
     requests:
       cpu: 100m

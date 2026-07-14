@@ -350,6 +350,15 @@ status and archive tag — copy the tags into `fetch_sobol_results.py
 - **Backfill submission**: The `dg launch` CLI cannot submit
   multi-partition backfills. Use the GraphQL API via
   `nrp/scripts/_submit_backfill.py`.
+- **NRP 4-pod policy — DEBUNKED 2026-07-14**: NRP support states there is
+  no concurrent-pod limit, and the namespace has no pod/CPU ResourceQuota.
+  The eviction pattern below was node-side reclamation (long CPU pods with
+  usage ≫ request are prime eviction targets; some node classes churn on a
+  ~5 h cadence). Mitigations: memory requests sized to usage, run-worker
+  resume (`maxResumeRunAttempts`), step retries, chains kept shorter than
+  the churn cadence, `nrp_heavy` pool limit raised to 16. The pool remains
+  useful as OUR throttle, not NRP's. Original (wrong) analysis kept below
+  for the observational record.
 - **NRP 4-pod policy** (seen 2026-07-08, root-caused the MCMC chain
   failures): a user may run **at most 4 concurrent pods** that are
   "resource-using", i.e. that request more than **1 CPU / 2GB memory**.

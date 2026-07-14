@@ -146,6 +146,14 @@ dagster-user-deployments:
         failureThreshold: 8
       includeConfigInLaunchedRuns:
         enabled: true
+      env:
+        # NRP reservation (2026-07-14 grant): set to the exact value of the
+        # nautilus.io/reservation node taint. When set, heavy (nrp_heavy)
+        # pods tolerate + pin to the reserved nodes (dagster_pipeline.py
+        # reads it at code-location load; a deployment restart applies it —
+        # no image rebuild). Leave unset to schedule on general nodes.
+        # - name: NRP_RESERVATION
+        #   value: "<exact-taint-value-from-NRP>"
       envSecrets:
         - name: object-store-credentials
 

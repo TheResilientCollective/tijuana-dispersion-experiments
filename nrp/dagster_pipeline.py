@@ -137,6 +137,45 @@ _MCMC_K8S_TAGS = {
     },
 }
 
+# Reserved-node scheduling (NRP reservation grant, 2026-07-14; see
+# https://nrp.ai/documentation/userdocs/running/special/). When
+# NRP_RESERVATION is set on the code location, the heavy (nrp_heavy pool)
+# pods tolerate the reservation taint AND pin to those nodes via node
+# affinity, so they never compete on the general preemptible pool. Unset
+# => default untainted-node scheduling under the 4-pod courtesy cap.
+# Changing the value needs only a deployment env change, not a rebuild.
+_NRP_RESERVATION = os.getenv("NRP_RESERVATION")
+if _NRP_RESERVATION:
+    _RESERVATION_POD_SPEC = {
+        "tolerations": [
+            {
+                "key": "nautilus.io/reservation",
+                "operator": "Equal",
+                "value": _NRP_RESERVATION,
+                "effect": "NoSchedule",
+            },
+        ],
+        "affinity": {
+            "node_affinity": {
+                "required_during_scheduling_ignored_during_execution": {
+                    "node_selector_terms": [
+                        {
+                            "match_expressions": [
+                                {
+                                    "key": "nautilus.io/reservation",
+                                    "operator": "In",
+                                    "values": [_NRP_RESERVATION],
+                                },
+                            ],
+                        },
+                    ],
+                },
+            },
+        },
+    }
+    _MCMC_K8S_TAGS["dagster-k8s/config"]["pod_spec_config"] = _RESERVATION_POD_SPEC
+    _AGGREGATOR_K8S_TAGS["dagster-k8s/config"]["pod_spec_config"] = _RESERVATION_POD_SPEC
+
 # NRP worker nodes are preemptible — long step pods (multi-hour SMC chains,
 # CV folds) get reaped mid-run. A step-level retry makes the step relaunch
 # on a fresh pod instead of failing the partition, so backfills self-heal

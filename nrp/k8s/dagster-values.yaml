@@ -180,7 +180,10 @@ concurrency:
   enabled: true
   pools:
     granularity: "op"
-    defaultLimit: 4
+    # 2026-07-14: NRP raised our concurrent heavy-pod allowance to 16
+    # (was the 4-pod courtesy cap) — a full 8-chain MCMC backfill plus
+    # CV folds can now run in one wave.
+    defaultLimit: 16
     # Allow plenty of runs to queue while blocked on a pool slot (8 MCMC
     # chains + CV folds contend for 4 slots).
     opGranularityRunBuffer: 25

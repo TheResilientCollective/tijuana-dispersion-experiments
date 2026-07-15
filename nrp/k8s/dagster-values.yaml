@@ -147,6 +147,13 @@ dagster-user-deployments:
       includeConfigInLaunchedRuns:
         enabled: true
       env:
+        # Kill the forward request cache in all launched pods: calibration
+        # requests are unique per SMC particle, so the cache never hits but
+        # writes ~8 GB/h of JSON per chain pod — filled the 50Gi ephemeral
+        # limit in ~5 h and got pods evicted (2026-07-14 diagnosis).
+        # Propagates to run + step pods via includeConfigInLaunchedRuns.
+        - name: DISPERSION_DISABLE_CACHE
+          value: "1"
         # NRP reservation (2026-07-14 grant): set to the exact value of the
         # nautilus.io/reservation node taint. When set, heavy (nrp_heavy)
         # pods tolerate + pin to the reserved nodes (dagster_pipeline.py

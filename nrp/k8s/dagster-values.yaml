@@ -115,13 +115,19 @@ dagster-user-deployments:
     - name: nrp
       # digest-pinned worker image (must match nrp/.env
       # DAGSTER_IMAGE; build/push per nrp/DEPLOYMENT.md §1).
+      # CPU limit history: at 500m the gRPC code server chokes when a
+      # backfill launch fans out (8 run workers + daemon all request
+      # definitions), the daemon sees the location as failing to load,
+      # and DagsterAssetBackfillDataLoadError cancels the whole backfill
+      # (killed backfills nwtdwhfy + jlccgikv, 2026-07-15). Give it a
+      # full core and headroom.
       resources:
         requests:
-          cpu: 100m
-          memory: 256Mi
-        limits:
           cpu: 500m
           memory: 512Mi
+        limits:
+          cpu: "1"
+          memory: 2Gi
       image:
         repository: gitlab-registry.nrp-nautilus.io/ucsd-center4health/nrp-worker
         # SHA-pinned, NOT :dev — step pods use imagePullPolicy IfNotPresent

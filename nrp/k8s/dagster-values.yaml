@@ -127,7 +127,7 @@ dagster-user-deployments:
         # SHA-pinned, NOT :dev — step pods use imagePullPolicy IfNotPresent
         # (runLauncher), so a mutable :dev tag can leave stale code cached on
         # nodes. An immutable per-commit tag forces a fresh pull everywhere.
-        tag: "55ec87c"
+        tag: "7f67e31"
         pullPolicy: Always
       dagsterApiGrpcArgs:
         - "-m"

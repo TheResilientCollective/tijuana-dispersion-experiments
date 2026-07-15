@@ -68,10 +68,11 @@ COPY nrp/scripts/with_gh_auth.sh /tmp/with_gh_auth.sh
 RUN --mount=type=secret,id=gh_token sh /tmp/with_gh_auth.sh && rm /tmp/with_gh_auth.sh
 
 # ---- HYSPLIT binaries (saturn_nestor workload) ----------------------
-# The tarball is license-gated and NOT in git (build/ is gitignored):
-#   cp /path/to/hysplit.v5.4.2_x86_64.tar.gz build/
-# BuildKit prunes unused stages, so --target base|worker builds stay
-# tarball-free. Modeled on tj_h2s_prediction/build/Dockerfile_hysplit_worker.
+# Tarball fallback stage. The tarball is license-gated and NOT in git
+# (build/ is gitignored): cp /path/to/hysplit.v5.4.2_x86_64.tar.gz build/
+# BuildKit prunes unused stages, so this is only built when selected via
+# HYSPLIT_SOURCE below (and --target base|worker builds never need it).
+# Modeled on tj_h2s_prediction/build/Dockerfile_hysplit_worker.
 FROM debian:trixie-slim AS hysplit-builder
 ARG HYSPLIT_ARCHIVE=hysplit.v5.4.2_x86_64.tar.gz
 COPY build/${HYSPLIT_ARCHIVE} /tmp/hysplit.tar.gz
@@ -81,6 +82,15 @@ RUN set -eux; \
     find /opt/hysplit -type f \( -name "*.o" -o -name "*.a" \) -delete; \
     rm -f /tmp/hysplit.tar.gz
 
+# Where /opt/hysplit comes from. Default: the GeoDemic GHCR image (same
+# v5.4.2 layout — GeoDemic CI builds it from the same tarball recipe).
+# It is PRIVATE: `docker login ghcr.io` with a GitHub token that has
+# read:packages on center4health. No tarball needed on this path.
+# Fallback without center4health access:
+#   --build-arg HYSPLIT_SOURCE=hysplit-builder   (tarball in build/)
+ARG HYSPLIT_SOURCE=ghcr.io/center4health/geodemichysplit:latest
+FROM ${HYSPLIT_SOURCE} AS hysplit-donor
+
 # ---- worker + HYSPLIT: the image for saturn_nestor_job pods ---------
 # Runtime libs per the tj reference image; verify the netcdf/proj package
 # names if the python base image moves to a different Debian release.
@@ -88,7 +98,7 @@ FROM worker AS worker-hysplit
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libnetcdff7 netcdf-bin libproj25 proj-data proj-bin tini \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=hysplit-builder /opt/hysplit /opt/hysplit
+COPY --from=hysplit-donor /opt/hysplit /opt/hysplit
 ENV HYSPLIT_PATH=/opt/hysplit/exec \
     HYSPLIT_METEO_DIR=/data/hysplit/meteo \
     HYSPLIT_WORKING_DIR=/data/hysplit/work

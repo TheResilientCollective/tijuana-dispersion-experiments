@@ -358,19 +358,50 @@ forward H2S calculation. Science in `nrp/saturn_nestor.py`, assets in
 `nrp/saturn_assets.py`; results archive to `s3://<bucket>/runs/hysplit/{tag}/`
 and appear in the `build_index` ledger.
 
-### 8a. Image — HYSPLIT is baked into a dedicated stage
+### 8a. Image — HYSPLIT binaries from the GeoDemic GHCR image (default)
 
-The HYSPLIT v5.4.2 tarball is **license-gated and not in git**. Get it from
-the project's resilient MinIO (or `GeoDemic/backend/`), place it, build:
+The `worker-hysplit` stage copies `/opt/hysplit` from
+`ghcr.io/center4health/geodemichysplit:latest` — the image GeoDemic CI
+builds from the same v5.4.2 tarball recipe (and Railway deploys). No
+tarball needed on this path:
+
+```bash
+# GH_TOKEN needs read:packages + center4health org access
+# (gh auth token usually works; the docker-login username is ignored).
+make docker-build-hysplit          # logs into ghcr.io, builds :<sha>-hysplit
+```
+
+**Credentials facts:** the GHCR package is PRIVATE (anonymous pull 401 —
+keep it that way; HYSPLIT's license is registration-gated). GeoDemic
+stores no registry credential in-repo: its CI pushes with the ephemeral
+Actions `GITHUB_TOKEN`, and Railway's pull credential lives in the
+Railway dashboard. For this repo the token is only used at BUILD time on
+your machine — **no new NRP secret is needed**: the built image is pushed
+to the NRP GitLab registry, which pods already pull via the existing
+`gitlab-registry-cred` secret (§3 + `imagePullSecrets` in
+`k8s/dagster-values.yaml`). Only if pods ever had to pull ghcr.io
+directly would you add a second docker-registry secret
+(`--docker-server=ghcr.io`, PAT with read:packages) and list it beside
+`gitlab-registry-cred` in both imagePullSecrets blocks.
+
+**Fallback (no center4health access)** — the license-gated tarball, from
+the resilient MinIO (pointer: `GeoDemic/backend/resilient_hysplit_location`):
 
 ```bash
 cp /path/to/hysplit.v5.4.2_x86_64.tar.gz build/
-make docker-build-hysplit          # --target worker-hysplit, :<sha>-hysplit tag
+make docker-build-hysplit HYSPLIT_SOURCE=hysplit-builder
 ```
 
-`--target base|worker` builds remain tarball-free (BuildKit prunes the
-hysplit stages). Pin the `-hysplit` digest in `nrp/.env` `DAGSTER_IMAGE`
-when running this workload on the cluster.
+Caveats: GeoDemic's `hysplit-ghcr-build.yml` expects the tarball in its
+checkout but it is not committed there, so `:latest` may be stale — after
+the first pull, sanity-check `docker run --rm <img>
+/opt/hysplit/exec/hycs_std` and pin the digest via
+`--build-arg HYSPLIT_SOURCE=ghcr.io/center4health/geodemichysplit@sha256:…`.
+`--target base|worker` builds remain tarball- and ghcr-free (BuildKit
+prunes the hysplit stages). Pin the `-hysplit` digest in `nrp/.env`
+`DAGSTER_IMAGE` when running this workload on the cluster. Optional met
+mirror creds (`MET_MIRROR_*`, §8b) go into the `object-store-credentials`
+secret (§3) like the other pod env vars.
 
 ### 8b. Meteorology — sizes and staging
 

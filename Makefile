@@ -23,11 +23,11 @@ IMAGE_TAG_DEV := $(REGISTRY)/$(ORG)/$(IMAGE):dev
 IMAGE_TAG_HYSPLIT_SHA := $(REGISTRY)/$(ORG)/$(IMAGE):$(GIT_SHA)-hysplit
 IMAGE_TAG_HYSPLIT_DEV := $(REGISTRY)/$(ORG)/$(IMAGE):dev-hysplit
 
-# Where the worker-hysplit stage gets /opt/hysplit. Default: the GeoDemic GHCR
-# image (private — GH_TOKEN needs read:packages on center4health). Fallback for
-# machines without that access (license-gated tarball in build/):
-#   make docker-build-hysplit HYSPLIT_SOURCE=hysplit-builder
-HYSPLIT_SOURCE ?= ghcr.io/center4health/geodemichysplit:latest
+# Base image for the worker-hysplit stage: the ONE image carrying the
+# registered HYSPLIT (private — GH_TOKEN needs read:packages on center4health).
+# Pin a digest for reproducible builds:
+#   make docker-build-hysplit HYSPLIT_BASE=ghcr.io/center4health/geodemichysplit@sha256:…
+HYSPLIT_BASE ?= ghcr.io/center4health/geodemichysplit:latest
 
 # Source GitLab creds from nrp/.env; resolve GH_TOKEN from gh if unset. Used as a
 # prefix inside every recipe that talks to Docker so login + push share one shell
@@ -40,8 +40,8 @@ help:
 	@echo "  make docker-build-push   Build (amd64) + login + push  [most common]"
 	@echo "  make docker-build        Build image only ($(GIT_SHA) + dev)"
 	@echo "  make docker-build-hysplit  Build worker+HYSPLIT image ($(GIT_SHA)-hysplit + dev-hysplit)"
-	@echo "                             HYSPLIT from $(HYSPLIT_SOURCE)"
-	@echo "                             (fallback: HYSPLIT_SOURCE=hysplit-builder + tarball in build/)"
+	@echo "                             derived FROM $(HYSPLIT_BASE)"
+	@echo "                             (override/pin with HYSPLIT_BASE=...@sha256:…)"
 	@echo "  make docker-push         Login + push existing image (no rebuild)"
 	@echo "  make docker-login        Authenticate to the registry"
 	@echo "  make docker-digest       Print pushed image digest (for DAGSTER_IMAGE)"
@@ -73,27 +73,20 @@ docker-build:
 			. ; \
 		echo "Built + tagged: $(IMAGE_TAG_SHA) , :dev"'
 
-# worker + HYSPLIT binaries (saturn_nestor_job). Binaries come from
-# $(HYSPLIT_SOURCE): the GeoDemic GHCR image by default (docker login ghcr.io,
-# read:packages), or the local tarball stage via HYSPLIT_SOURCE=hysplit-builder.
+# Worker image for saturn_nestor_job, derived FROM $(HYSPLIT_BASE) — the
+# geodemichysplit image plus the nrp code/env (docker login ghcr.io needed).
 docker-build-hysplit:
 	@bash -c '$(LOAD_ENV) \
 		: "$${GH_TOKEN:?no GH_TOKEN — run: gh auth login}"; \
-		if [ "$(HYSPLIT_SOURCE)" = "hysplit-builder" ]; then \
-			if [ ! -f build/hysplit.v5.4.2_x86_64.tar.gz ]; then \
-				echo "✗ build/hysplit.v5.4.2_x86_64.tar.gz missing (license-gated; copy it in first)"; exit 1; \
-			fi; \
-		else \
-			echo "$$GH_TOKEN" | docker login ghcr.io -u USERNAME --password-stdin \
-				|| echo "⚠ ghcr.io login failed — pull of $(HYSPLIT_SOURCE) will fail unless cached locally"; \
-		fi; \
-		echo "Building $(IMAGE_TAG_HYSPLIT_SHA) (--platform linux/amd64, HYSPLIT from $(HYSPLIT_SOURCE))..."; \
+		echo "$$GH_TOKEN" | docker login ghcr.io -u USERNAME --password-stdin \
+			|| echo "⚠ ghcr.io login failed — pull of $(HYSPLIT_BASE) will fail unless cached locally"; \
+		echo "Building $(IMAGE_TAG_HYSPLIT_SHA) (--platform linux/amd64, FROM $(HYSPLIT_BASE))..."; \
 		DOCKER_BUILDKIT=1 docker build \
 			-f nrp/Dockerfile \
 			--platform linux/amd64 \
 			--target worker-hysplit \
 			--secret id=gh_token,env=GH_TOKEN \
-			--build-arg HYSPLIT_SOURCE=$(HYSPLIT_SOURCE) \
+			--build-arg HYSPLIT_BASE=$(HYSPLIT_BASE) \
 			-t $(IMAGE_TAG_HYSPLIT_SHA) \
 			-t $(IMAGE_TAG_HYSPLIT_DEV) \
 			. ; \

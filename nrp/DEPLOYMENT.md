@@ -358,18 +358,32 @@ forward H2S calculation. Science in `nrp/saturn_nestor.py`, assets in
 `nrp/saturn_assets.py`; results archive to `s3://<bucket>/runs/hysplit/{tag}/`
 and appear in the `build_index` ledger.
 
-### 8a. Image — HYSPLIT binaries from the GeoDemic GHCR image (default)
+### 8a. Image — ONE registered-HYSPLIT image; the worker derives from it
 
-The `worker-hysplit` stage copies `/opt/hysplit` from
-`ghcr.io/center4health/geodemichysplit:latest` — the image GeoDemic CI
-builds from the same v5.4.2 tarball recipe (and Railway deploys). No
-tarball needed on this path:
+`ghcr.io/center4health/geodemichysplit` is the **single** image embedding
+the licensed HYSPLIT v5.4.2 (built and owned by GeoDemic CI,
+`hysplit-ghcr-build.yml`; Railway deploys the same image). The
+`worker-hysplit` stage is `FROM` that image plus a layer with what this
+workload needs: git, a uv-managed Python 3.12 venv at `/nrp/.venv` (this
+repo pins `==3.12.*`; the base is 3.13 and ships uv), the locked deps +
+the private `service` extra, and the nrp code. No HYSPLIT tarball exists
+anywhere in this repo — the license artifact is managed in exactly one
+place. (The pre-derivation tarball/donor stages are in git history at
+`b381d15` if ever needed.)
 
 ```bash
 # GH_TOKEN needs read:packages + center4health org access
 # (gh auth token usually works; the docker-login username is ignored).
 make docker-build-hysplit          # logs into ghcr.io, builds :<sha>-hysplit
+# Reproducible builds: pin the base digest after a sanity check
+docker run --rm <img> /opt/hysplit/exec/hycs_std   # banner shows v5.4.2
+make docker-build-hysplit HYSPLIT_BASE=ghcr.io/center4health/geodemichysplit@sha256:…
 ```
+
+The base already provides the netcdf/proj/tini runtime libs,
+`/data/hysplit/{work,meteo,output}` dirs owned by its non-root `geodemic`
+user (the worker runs as that user), and `HYSPLIT_WORKING_DIR` /
+`HYSPLIT_METEO_DIR` env matching the nrp defaults.
 
 **Credentials facts:** the GHCR package is PRIVATE (anonymous pull 401 —
 keep it that way; HYSPLIT's license is registration-gated). GeoDemic
@@ -384,24 +398,16 @@ directly would you add a second docker-registry secret
 (`--docker-server=ghcr.io`, PAT with read:packages) and list it beside
 `gitlab-registry-cred` in both imagePullSecrets blocks.
 
-**Fallback (no center4health access)** — the license-gated tarball, from
-the resilient MinIO (pointer: `GeoDemic/backend/resilient_hysplit_location`):
+`--target base|worker` builds remain ghcr-free (BuildKit prunes the
+derived stage). Pin the `-hysplit` digest in `nrp/.env` `DAGSTER_IMAGE`
+when running this workload on the cluster. Optional met mirror creds
+(`MET_MIRROR_*`, §8b) go into the `object-store-credentials` secret (§3)
+like the other pod env vars.
 
-```bash
-cp /path/to/hysplit.v5.4.2_x86_64.tar.gz build/
-make docker-build-hysplit HYSPLIT_SOURCE=hysplit-builder
-```
-
-Caveats: GeoDemic's `hysplit-ghcr-build.yml` expects the tarball in its
-checkout but it is not committed there, so `:latest` may be stale — after
-the first pull, sanity-check `docker run --rm <img>
-/opt/hysplit/exec/hycs_std` and pin the digest via
-`--build-arg HYSPLIT_SOURCE=ghcr.io/center4health/geodemichysplit@sha256:…`.
-`--target base|worker` builds remain tarball- and ghcr-free (BuildKit
-prunes the hysplit stages). Pin the `-hysplit` digest in `nrp/.env`
-`DAGSTER_IMAGE` when running this workload on the cluster. Optional met
-mirror creds (`MET_MIRROR_*`, §8b) go into the `object-store-credentials`
-secret (§3) like the other pod env vars.
+Freshness: GeoDemic's `hysplit-ghcr-build.yml` fetches the tarball from
+the resilient MinIO during CI (fix on GeoDemic branch
+`claude/nestor-h2s-saturn-hysplit-719e7e`), so `:latest` is rebuildable
+via that workflow's `workflow_dispatch`.
 
 ### 8b. Meteorology — sizes and staging
 
@@ -426,7 +432,7 @@ archive) in the met dir wins automatically.
 ```bash
 # Local smoke (inside the worker-hysplit container; gdas1 = small met):
 mkdir -p met
-docker run --rm -v "$PWD/met":/data/hysplit/meteo -v "$PWD/.dagster_io":/app/.dagster_io \
+docker run --rm -v "$PWD/met":/data/hysplit/meteo -v "$PWD/.dagster_io":/nrp/.dagster_io \
   <image>:dev-hysplit \
   dagster asset materialize -m nrp.definitions \
     --select 'saturn_backward_footprint,saturn_inferred_emissions,saturn_forward_verification' \

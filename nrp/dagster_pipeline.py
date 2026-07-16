@@ -39,6 +39,7 @@ assets," "io_manager," "resources," "sensors."
 import json as _json
 import logging
 import os
+import time
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -750,6 +751,14 @@ def mcmc_chain_results(
 
     param_names = list(sobol.PARAM_RANGES)
 
+    # Observability (2026-07-16): chain runtime = stages × evals/stage ×
+    # s/eval, and none of the three were visible — 9 h chains logged
+    # nothing between "Sampling 1 chain" and completion. A ~5-minute
+    # heartbeat decomposes it live; the post-run summary (below) records
+    # the totals durably in the chain's config dict.
+    _t0 = time.monotonic()
+    _ev = {"n": 0, "fwd_s": 0.0, "last_log": _t0, "last_n": 0}
+
     def forward_model_fn(params: dict[str, float]) -> np.ndarray:
         """Concrete param dict → predicted concentrations at the valid obs points."""
         row = np.array([params[n] for n in param_names], dtype=float)
@@ -764,7 +773,32 @@ def mcmc_chain_results(
             drainage_bearing_deg=config.drainage_bearing_deg,
             ebb_source=config.ebb_source,
         )
+        t = time.monotonic()
         pred = sobol.predict_concentrations(row, param_names, drivers, met, **kw)
+        now = time.monotonic()
+        _ev["fwd_s"] += now - t
+        _ev["n"] += 1
+        if now - _ev["last_log"] >= 300.0:
+            window_rate = (_ev["n"] - _ev["last_n"]) / (now - _ev["last_log"])
+            elapsed_h = (now - _t0) / 3600.0
+            try:
+                import resource
+
+                rss_gib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024**2)
+            except Exception:
+                rss_gib = float("nan")
+            # print (not context.log): heartbeats belong in the pod log,
+            # not as thousands of rows in the Dagster event DB.
+            print(
+                f"SMC heartbeat: {_ev['n']} forward evals in {elapsed_h:.2f} h"
+                f" | {window_rate:.2f} evals/s (5-min window)"
+                f" | mean {1000 * _ev['fwd_s'] / max(_ev['n'], 1):.0f} ms/eval"
+                f" | fwd share {100 * _ev['fwd_s'] / max(now - _t0, 1e-9):.0f}%"
+                f" | rss {rss_gib:.2f} GiB",
+                flush=True,
+            )
+            _ev["last_log"] = now
+            _ev["last_n"] = _ev["n"]
         return pred[valid]
 
     # Sobol-informed priors from THIS study's ST indices (not a hardcoded table).
@@ -815,7 +849,35 @@ def mcmc_chain_results(
         n_draws=config.n_draws,
         seed=chain_seed,
     )
-    context.log.info("MCMC chain %s complete", context.partition_key)
+
+    # Post-run SMC anatomy: stages × evals × s/eval — the "why was this
+    # chain slow" record. Stage count / beta come from sample_stats when
+    # pymc exposes them (best-effort; never fail the chain over it).
+    wall_s = time.monotonic() - _t0
+    smc_stats: dict[str, Any] = {
+        "n_forward_evals": int(_ev["n"]),
+        "wall_s": round(wall_s, 1),
+        "fwd_s": round(_ev["fwd_s"], 1),
+        "mean_ms_per_eval": round(1000.0 * _ev["fwd_s"] / max(_ev["n"], 1), 2),
+        "fwd_share": round(_ev["fwd_s"] / max(wall_s, 1e-9), 3),
+    }
+    try:
+        ss = idata.sample_stats
+        for k in ("beta", "accept_rate", "log_marginal_likelihood"):
+            if k in ss:
+                vals = np.asarray(ss[k].values).ravel()
+                smc_stats[f"{k}_final"] = float(vals[-1])
+                smc_stats[f"n_{k}_records"] = int(vals.size)
+    except Exception as exc:  # observability must never kill the science
+        context.log.warning("SMC stats extraction skipped: %s", exc)
+    context.log.info(
+        "MCMC chain %s complete: %.1f h wall, %d fwd evals (%.0f ms/eval, fwd share %.0f%%)",
+        context.partition_key,
+        wall_s / 3600.0,
+        smc_stats["n_forward_evals"],
+        smc_stats["mean_ms_per_eval"],
+        100 * smc_stats["fwd_share"],
+    )
 
     return {
         "idata": idata.to_dict(),
@@ -836,6 +898,7 @@ def mcmc_chain_results(
             "flow_turbulence": config.flow_turbulence,
             "extra_windows": [list(w) for w in config.extra_windows],
             "validation_windows": [list(w) for w in config.validation_windows],
+            "smc_stats": smc_stats,
         },
     }
 
@@ -1011,6 +1074,9 @@ def mcmc_aggregate(
             "bound_railing": railing,
             "posterior_predictive": predictive,
             "held_out_predictive": held_out,
+            # Per-chain SMC anatomy (evals, wall, ms/eval) — the "why was
+            # this run slow" record across the fleet.
+            "chain_timing": {name: v.get("config", {}).get("smc_stats") for name, v in ordered},
         }
         s3c.put_object(
             Bucket=bucket,

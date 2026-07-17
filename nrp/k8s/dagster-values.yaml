@@ -33,6 +33,20 @@ serviceAccount:
 # partitioned materialization does not execute.
 dagsterDaemon:
   enabled: true
+  # Run queue: one shared cap across BOTH code locations (nrp + nrp-hysplit)
+  # so a HYSPLIT run and a sobol backfill can't jointly blow the NRP
+  # 4-concurrent-pod policy. The HYSPLIT job is additionally capped at 1
+  # concurrent run so it can never crowd out an in-flight sobol backfill.
+  runCoordinator:
+    enabled: true
+    type: QueuedRunCoordinator
+    config:
+      queuedRunCoordinator:
+        maxConcurrentRuns: 4
+        tagConcurrencyLimits:
+          - key: "dagster/job_name"
+            value: "saturn_nestor_job"
+            limit: 1
   resources:
     requests:
       cpu: 100m
@@ -106,7 +120,13 @@ postgresql:
   service:
     port: 5432
 
-# The NRP code location (our Dagster project: `nrp.definitions`).
+# Code locations. Two deployments against the one Dagster instance:
+#   nrp         — sobol/MCMC/CV/reporting (module nrp.definitions),
+#                 plain worker image.
+#   nrp-hysplit — Saturn→Nestor HYSPLIT (module nrp.saturn_definitions),
+#                 worker-hysplit image (license-gated binary baked in).
+# Separate locations = separate images + gRPC servers, so pushing/pinning
+# the -hysplit image never redeploys or interrupts the sobol location.
 dagster-user-deployments:
   enabled: true
   imagePullSecrets:
@@ -129,6 +149,28 @@ dagster-user-deployments:
       dagsterApiGrpcArgs:
         - "-m"
         - "nrp.definitions"
+      port: 3030
+      includeConfigInLaunchedRuns:
+        enabled: true
+      envSecrets:
+        - name: object-store-credentials
+    - name: nrp-hysplit
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+      image:
+        # -hysplit variant (make docker-build-hysplit); pin a digest here
+        # when running the workload for real (DEPLOYMENT.md §8a).
+        repository: gitlab-registry.nrp-nautilus.io/ucsd-center4health/nrp-worker
+        tag: "dev-hysplit"
+        pullPolicy: Always
+      dagsterApiGrpcArgs:
+        - "-m"
+        - "nrp.saturn_definitions"
       port: 3030
       includeConfigInLaunchedRuns:
         enabled: true

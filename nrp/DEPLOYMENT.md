@@ -358,6 +358,25 @@ forward H2S calculation. Science in `nrp/saturn_nestor.py`, assets in
 `nrp/saturn_assets.py`; results archive to `s3://<bucket>/runs/hysplit/{tag}/`
 and appear in the `build_index` ledger.
 
+**This workload is its own code location** — `nrp-hysplit` (module
+`nrp.saturn_definitions`), a second user-deployment in the same Helm
+release as the sobol location `nrp` (see `k8s/dagster-values.yaml`), so
+it never conflicts with a running sobol workload:
+
+- The `-hysplit` image is pinned on the `nrp-hysplit` deployment only.
+  Building/redeploying it (`helm upgrade` re-rolls just that gRPC
+  server) does **not** touch the sobol location, its image, or its
+  in-flight runs. Do NOT repoint the shared `DAGSTER_IMAGE` for this.
+- Pod budget: both locations share one run queue capped at
+  `maxConcurrentRuns: 4` (NRP concurrent-pod policy), and
+  `saturn_nestor_job` is further limited to 1 concurrent run
+  (`tagConcurrencyLimits`) + 1 concurrent step Job (`max_concurrent: 1`
+  in `nrp/saturn_definitions.py`), so a HYSPLIT run queues beside an
+  active sobol backfill instead of competing with it.
+- A separate Helm release/namespace was deliberately NOT used: it would
+  spend ~3 extra control-plane pods (webserver, daemon, postgres) of the
+  pod budget and split run history across two instances.
+
 ### 8a. Image — ONE registered-HYSPLIT image; the worker derives from it
 
 `ghcr.io/center4health/geodemichysplit` is the **single** image embedding
@@ -399,8 +418,10 @@ directly would you add a second docker-registry secret
 `gitlab-registry-cred` in both imagePullSecrets blocks.
 
 `--target base|worker` builds remain ghcr-free (BuildKit prunes the
-derived stage). Pin the `-hysplit` digest in `nrp/.env` `DAGSTER_IMAGE`
-when running this workload on the cluster. Optional met mirror creds
+derived stage). Pin the pushed `-hysplit` digest as the `nrp-hysplit`
+deployment image in `k8s/dagster-values.yaml` (NOT in `nrp/.env`
+`DAGSTER_IMAGE` — that would repoint the sobol location) and
+`helm upgrade` to roll it out. Optional met mirror creds
 (`MET_MIRROR_*`, §8b) go into the `object-store-credentials` secret (§3)
 like the other pod env vars.
 
@@ -430,17 +451,22 @@ archive) in the met dir wins automatically.
 ### 8c. Run
 
 ```bash
+# Deploy/refresh the nrp-hysplit code location (sobol location untouched):
+helm upgrade --install dagster dagster/dagster -n ucsd-center4health \
+  -f nrp/k8s/dagster-values.yaml
+
 # Local smoke (inside the worker-hysplit container; gdas1 = small met):
 mkdir -p met
 docker run --rm -v "$PWD/met":/data/hysplit/meteo -v "$PWD/.dagster_io":/nrp/.dagster_io \
   <image>:dev-hysplit \
-  dagster asset materialize -m nrp.definitions \
+  dagster asset materialize -m nrp.saturn_definitions \
     --select 'saturn_backward_footprint,saturn_inferred_emissions,saturn_forward_verification' \
     --config-json '{"ops": {"saturn_backward_footprint": {"config": {"met_source": "gdas1"}},
                     "saturn_inferred_emissions": {"config": {"met_source": "gdas1"}},
                     "saturn_forward_verification": {"config": {"met_source": "gdas1"}}}}'
 
-# Cluster: uv run dg launch --job saturn_nestor_job   (or the Dagster UI)
+# Cluster: launch saturn_nestor_job from the Dagster UI (code location
+# nrp-hysplit), or: uv run dg launch --job saturn_nestor_job
 ```
 
 First-run checks (one-time): confirm the concentration grid in `MESSAGE`

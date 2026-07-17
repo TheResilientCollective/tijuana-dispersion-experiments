@@ -1,4 +1,13 @@
-# Dagster workspace config — points to the pipeline module.
+# Dagster workspace config — one entry per code location.
+#
+# `nrp` (sobol/MCMC/CV/reporting) and `nrp-hysplit` (Saturn→Nestor HYSPLIT)
+# are separate code locations so the HYSPLIT workload deploys with its own
+# image and never conflicts with a running sobol workload. On-cluster the
+# same split is expressed as two user-deployments in k8s/dagster-values.yaml.
 load_from:
   - python_file:
       relative_path: dagster_pipeline.py
+      location_name: nrp
+  - python_file:
+      relative_path: saturn_definitions.py
+      location_name: nrp-hysplit

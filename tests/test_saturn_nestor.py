@@ -377,7 +377,17 @@ def test_import_contract_assets_and_job() -> None:
     assert saturn_nestor_job.name == "saturn_nestor_job"
 
 
-def test_defs_include_saturn_job() -> None:
-    from nrp.dagster_pipeline import defs
+def test_hysplit_location_defs_include_saturn_job() -> None:
+    from nrp.saturn_definitions import defs
 
     assert defs.get_job_def("saturn_nestor_job") is not None
+
+
+def test_sobol_location_excludes_saturn_job() -> None:
+    """The two code locations stay disjoint: the sobol location (plain
+    worker image) must not carry the HYSPLIT job, and the hysplit location
+    must not import the pymc/SALib-heavy pipeline module."""
+    from nrp.dagster_pipeline import defs
+
+    job_names = {j.name for j in defs.get_repository_def().get_all_jobs()}
+    assert "saturn_nestor_job" not in job_names

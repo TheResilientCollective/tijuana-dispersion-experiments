@@ -106,7 +106,13 @@ postgresql:
   service:
     port: 5432
 
-# The NRP code location (our Dagster project: `nrp.definitions`).
+# Code locations. Two deployments against the one Dagster instance:
+#   nrp         — sobol/MCMC/CV/reporting (module nrp.definitions),
+#                 plain worker image.
+#   nrp-hysplit — Saturn→Nestor HYSPLIT (module nrp.saturn_definitions),
+#                 worker-hysplit image (license-gated binary baked in).
+# Separate locations = separate images + gRPC servers, so pushing/pinning
+# the -hysplit image never redeploys or interrupts the sobol location.
 dagster-user-deployments:
   enabled: true
   imagePullSecrets:
@@ -169,6 +175,28 @@ dagster-user-deployments:
         #   value: "<exact-taint-value-from-NRP>"
       envSecrets:
         - name: object-store-credentials
+    - name: nrp-hysplit
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+      image:
+        # -hysplit variant (make docker-build-hysplit); pin a digest here
+        # when running the workload for real (DEPLOYMENT.md §8a).
+        repository: gitlab-registry.nrp-nautilus.io/ucsd-center4health/nrp-worker
+        tag: "dev-hysplit"
+        pullPolicy: Always
+      dagsterApiGrpcArgs:
+        - "-m"
+        - "nrp.saturn_definitions"
+      port: 3030
+      includeConfigInLaunchedRuns:
+        enabled: true
+      envSecrets:
+        - name: object-store-credentials
 
 # ============================================================
 # Concurrency (modern top-level block; do NOT also set
@@ -202,3 +230,11 @@ concurrency:
     opGranularityRunBuffer: 25
   runs:
     maxConcurrentRuns: 25
+    # The HYSPLIT job stays capped at 1 concurrent run so it can never
+    # crowd out an in-flight sobol backfill (moved here from the old
+    # dagsterDaemon.runCoordinator block — the chart forbids setting
+    # tagConcurrencyLimits both places).
+    tagConcurrencyLimits:
+      - key: "dagster/job_name"
+        value: "saturn_nestor_job"
+        limit: 1

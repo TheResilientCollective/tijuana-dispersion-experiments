@@ -66,3 +66,44 @@ CMD ["dagster-daemon", "run"]
 FROM base AS worker
 COPY nrp/scripts/with_gh_auth.sh /tmp/with_gh_auth.sh
 RUN --mount=type=secret,id=gh_token sh /tmp/with_gh_auth.sh && rm /tmp/with_gh_auth.sh
+
+# ---- worker-hysplit: geodemichysplit + the nrp code/env -------------
+# ONE image carries the licensed HYSPLIT: ghcr.io/center4health/
+# geodemichysplit (built by GeoDemic CI from the registered v5.4.2
+# tarball). This stage derives from it — geodemic docker + a layer with
+# what the saturn_nestor workload needs — so no tarball ever lives here.
+# The base already ships uv, /opt/hysplit, netcdf/proj/tini runtime libs,
+# /data/hysplit/{work,meteo,output} dirs owned by the `geodemic` user,
+# and HYSPLIT_WORKING_DIR/HYSPLIT_METEO_DIR env matching nrp defaults.
+# It is PRIVATE: `docker login ghcr.io` with a GitHub token that has
+# read:packages on center4health. Pin a digest via
+#   --build-arg HYSPLIT_BASE=ghcr.io/center4health/geodemichysplit@sha256:…
+# (The pre-derivation tarball/donor stages live in git history: b381d15.)
+ARG HYSPLIT_BASE=ghcr.io/center4health/geodemichysplit:latest
+FROM ${HYSPLIT_BASE} AS worker-hysplit
+USER root
+# git: needed for the private tijuana-dispersion VCS dep (base has none).
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /nrp
+# The base is Python 3.13; this repo pins ==3.12.* — uv provisions a
+# managed 3.12 for the /nrp venv (locked wheels are proven on 3.12/amd64).
+RUN uv python install 3.12
+COPY pyproject.toml uv.lock* ./
+RUN uv sync --frozen --no-dev --no-install-project
+COPY nrp/scripts/with_gh_auth.sh /tmp/with_gh_auth.sh
+RUN --mount=type=secret,id=gh_token sh /tmp/with_gh_auth.sh && rm /tmp/with_gh_auth.sh
+COPY nrp/ ./nrp/
+COPY emissions_research/ ./emissions_research/
+COPY experiments/ ./experiments/
+COPY data/ ./data/
+RUN chown -R geodemic:geodemic /nrp && test -x /opt/hysplit/exec/hycs_std
+# Front-run the geodemic app venv on PATH; HYSPLIT_PATH for hysplit_exec.
+ENV VIRTUAL_ENV=/nrp/.venv \
+    PATH="/nrp/.venv/bin:$PATH" \
+    PYTHONPATH=/nrp \
+    PYTHONUNBUFFERED=1 \
+    HYSPLIT_PATH=/opt/hysplit/exec
+USER geodemic
+# Dagster overrides CMD when launching a specific run/step.
+CMD ["dagster-daemon", "run"]

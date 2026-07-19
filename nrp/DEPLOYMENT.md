@@ -431,7 +431,129 @@ Notes:
   live in S3 (`runs/…` + `dagster/runs/…`), so nothing scientific is lost.
 - Health: `kubectl get postgresql -n ucsd-center4health`.
 
-## 8. Teardown
+## 8. Saturn→Nestor HYSPLIT workload (`saturn_nestor_job`)
+
+Single-source (Saturn Blvd Bridge) / single-receptor (NESTOR-BES) back +
+forward H2S calculation. Science in `nrp/saturn_nestor.py`, assets in
+`nrp/saturn_assets.py`; results archive to `s3://<bucket>/runs/hysplit/{tag}/`
+and appear in the `build_index` ledger.
+
+**This workload is its own code location** — `nrp-hysplit` (module
+`nrp.saturn_definitions`), a second user-deployment in the same Helm
+release as the sobol location `nrp` (see `k8s/dagster-values.yaml`), so
+it never conflicts with a running sobol workload:
+
+- The `-hysplit` image is pinned on the `nrp-hysplit` deployment only.
+  Building/redeploying it (`helm upgrade` re-rolls just that gRPC
+  server) does **not** touch the sobol location, its image, or its
+  in-flight runs. Do NOT repoint the shared `DAGSTER_IMAGE` for this.
+- Pod budget: both locations share one run queue capped at
+  `maxConcurrentRuns: 4` (NRP concurrent-pod policy), and
+  `saturn_nestor_job` is further limited to 1 concurrent run
+  (`tagConcurrencyLimits`) + 1 concurrent step Job (`max_concurrent: 1`
+  in `nrp/saturn_definitions.py`), so a HYSPLIT run queues beside an
+  active sobol backfill instead of competing with it.
+- A separate Helm release/namespace was deliberately NOT used: it would
+  spend ~3 extra control-plane pods (webserver, daemon, postgres) of the
+  pod budget and split run history across two instances.
+
+### 8a. Image — ONE registered-HYSPLIT image; the worker derives from it
+
+`ghcr.io/center4health/geodemichysplit` is the **single** image embedding
+the licensed HYSPLIT v5.4.2 (built and owned by GeoDemic CI,
+`hysplit-ghcr-build.yml`; Railway deploys the same image). The
+`worker-hysplit` stage is `FROM` that image plus a layer with what this
+workload needs: git, a uv-managed Python 3.12 venv at `/nrp/.venv` (this
+repo pins `==3.12.*`; the base is 3.13 and ships uv), the locked deps +
+the private `service` extra, and the nrp code. No HYSPLIT tarball exists
+anywhere in this repo — the license artifact is managed in exactly one
+place. (The pre-derivation tarball/donor stages are in git history at
+`b381d15` if ever needed.)
+
+```bash
+# GH_TOKEN needs read:packages + center4health org access
+# (gh auth token usually works; the docker-login username is ignored).
+make docker-build-hysplit          # logs into ghcr.io, builds :<sha>-hysplit
+# Reproducible builds: pin the base digest after a sanity check
+docker run --rm <img> /opt/hysplit/exec/hycs_std   # banner shows v5.4.2
+make docker-build-hysplit HYSPLIT_BASE=ghcr.io/center4health/geodemichysplit@sha256:…
+```
+
+The base already provides the netcdf/proj/tini runtime libs,
+`/data/hysplit/{work,meteo,output}` dirs owned by its non-root `geodemic`
+user (the worker runs as that user), and `HYSPLIT_WORKING_DIR` /
+`HYSPLIT_METEO_DIR` env matching the nrp defaults.
+
+**Credentials facts:** the GHCR package is PRIVATE (anonymous pull 401 —
+keep it that way; HYSPLIT's license is registration-gated). GeoDemic
+stores no registry credential in-repo: its CI pushes with the ephemeral
+Actions `GITHUB_TOKEN`, and Railway's pull credential lives in the
+Railway dashboard. For this repo the token is only used at BUILD time on
+your machine — **no new NRP secret is needed**: the built image is pushed
+to the NRP GitLab registry, which pods already pull via the existing
+`gitlab-registry-cred` secret (§3 + `imagePullSecrets` in
+`k8s/dagster-values.yaml`). Only if pods ever had to pull ghcr.io
+directly would you add a second docker-registry secret
+(`--docker-server=ghcr.io`, PAT with read:packages) and list it beside
+`gitlab-registry-cred` in both imagePullSecrets blocks.
+
+`--target base|worker` builds remain ghcr-free (BuildKit prunes the
+derived stage). Pin the pushed `-hysplit` digest as the `nrp-hysplit`
+deployment image in `k8s/dagster-values.yaml` (NOT in `nrp/.env`
+`DAGSTER_IMAGE` — that would repoint the sobol location) and
+`helm upgrade` to roll it out. Optional met mirror creds
+(`MET_MIRROR_*`, §8b) go into the `object-store-credentials` secret (§3)
+like the other pod env vars.
+
+Freshness: GeoDemic's `hysplit-ghcr-build.yml` fetches the tarball from
+the resilient MinIO during CI (fix on GeoDemic branch
+`claude/nestor-h2s-saturn-hysplit-719e7e`), so `:latest` is rebuildable
+via that workflow's `workflow_dispatch`.
+
+### 8b. Meteorology — sizes and staging
+
+Met comes from the NOAA ARL AWS Open Data archive
+(`s3://noaa-oar-arl-hysplit-pds`, anonymous), fetched on demand by
+`nrp/metfetch.py`:
+
+- **hrrr** (default, 3 km): 6-h chunks of **~3.4 GB** → ~51 GB for the
+  default 3-day window + 12 h reach. Mount a CephFS **RWX PVC** at
+  `HYSPLIT_METEO_DIR` (200–500 GB) so pods share one copy — do NOT rely on
+  ephemeral storage for HRRR.
+- **gdas1** (1°, smoke tests): ~600 MB/week file.
+
+Resolution chain per file: pre-seeded met dir → optional NRP Ceph S3 mirror
+(`MET_MIRROR_ENDPOINT/BUCKET/KEY/SECRET`, pull-through AWS→mirror→pod) →
+OSDF/pelican (`/aws-opendata/us-east-1` namespace, opportunistic) → direct
+AWS HTTPS. A manually staged higher-resolution dataset (e.g. the 1 km Globus
+archive) in the met dir wins automatically.
+
+### 8c. Run
+
+```bash
+# Deploy/refresh the nrp-hysplit code location (sobol location untouched):
+helm upgrade --install dagster dagster/dagster -n ucsd-center4health \
+  -f nrp/k8s/dagster-values.yaml
+
+# Local smoke (inside the worker-hysplit container; gdas1 = small met):
+mkdir -p met
+docker run --rm -v "$PWD/met":/data/hysplit/meteo -v "$PWD/.dagster_io":/nrp/.dagster_io \
+  <image>:dev-hysplit \
+  dagster asset materialize -m nrp.saturn_definitions \
+    --select 'saturn_backward_footprint,saturn_inferred_emissions,saturn_forward_verification' \
+    --config-json '{"ops": {"saturn_backward_footprint": {"config": {"met_source": "gdas1"}},
+                    "saturn_inferred_emissions": {"config": {"met_source": "gdas1"}},
+                    "saturn_forward_verification": {"config": {"met_source": "gdas1"}}}}'
+
+# Cluster: launch saturn_nestor_job from the Dagster UI (code location
+# nrp-hysplit), or: uv run dg launch --job saturn_nestor_job
+```
+
+First-run checks (one-time): confirm the concentration grid in `MESSAGE`
+matches center 32.5632/-117.0918, 0.005° spacing, 0.20° span; and validate
+the EMITIMES header against a sample in `/opt/hysplit/testing/`.
+
+## 9. Teardown
 
 ```bash
 helm uninstall dagster -n ucsd-center4health

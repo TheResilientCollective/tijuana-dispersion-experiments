@@ -48,12 +48,17 @@ from typing import Any
 import dagster as dg
 import numpy as np
 import pandas as pd
-from dagster import AssetExecutionContext, RunFailureSensorContext, RunStatusSensorContext
-from dagster_aws.s3 import S3PickleIOManager, S3Resource
-from dagster_k8s import k8s_job_executor
+from dagster import AssetExecutionContext
+from dagster_aws.s3 import S3Resource
 
 from nrp import mcmc
 from nrp.runstore import RunManifest, write_manifest
+from nrp.shared_defs import (
+    make_executor,
+    make_resources,
+    nrp_run_failure_to_slack,
+    nrp_run_start_to_slack,
+)
 
 from . import sobol
 from .resources import SlackWebhookResource
@@ -1411,46 +1416,6 @@ def cv_aggregate(
 
 
 # ============================================================
-# Sensors: Slack notifications on run lifecycle
-# ============================================================
-
-
-@dg.run_failure_sensor(
-    monitored_jobs=None,  # all jobs in this code location
-    name="nrp_run_failure_to_slack",
-    description="Sends critical-tier Slack message on K8s job failure.",
-)
-def nrp_run_failure_to_slack(context: RunFailureSensorContext) -> None:
-    """Critical-tier alert — K8s pod failed and didn't recover via retry."""
-    slack: SlackWebhookResource = context.resources.slack
-    run = context.dagster_run
-    event_data = context.failure_event.event_specific_data
-    error_obj = getattr(event_data, "error", None)
-    error_msg = error_obj.message if error_obj else "unknown"
-    slack.critical(
-        f":rotating_light: NRP run failed\n"
-        f"Job: {run.job_name}\n"
-        f"Run ID: {run.run_id[:8]}\n"
-        f"Error: {error_msg}\n"
-        f"Dagster UI: <see Dagster instance>",
-    )
-
-
-@dg.run_status_sensor(
-    run_status=dg.DagsterRunStatus.STARTED,
-    monitored_jobs=None,
-    name="nrp_run_start_to_slack",
-    description="Sends watch-tier Slack message when an NRP run starts.",
-    minimum_interval_seconds=30,
-)
-def nrp_run_start_to_slack(context: RunStatusSensorContext) -> None:
-    """Watch-tier announcement — informational only."""
-    slack: SlackWebhookResource = context.resources.slack
-    run = context.dagster_run
-    slack.watch(f":rocket: NRP run started: {run.job_name} ({run.run_id[:8]})")
-
-
-# ============================================================
 # Definitions
 # ============================================================
 
@@ -1479,12 +1444,16 @@ sobol_automation_sensor = dg.AutomationConditionSensorDefinition(
 )
 
 
+# NOTE: the Saturn→Nestor HYSPLIT workload lives in its OWN code location
+# (nrp.saturn_definitions, deployed as `nrp-hysplit` with the -hysplit
+# image) so it can run and redeploy without conflicting with this one.
 defs = dg.Definitions(
     jobs=[sobol_aggregate_job],
     assets=[
         sobol_chunk_results,
         sobol_aggregate,
         sobol_post_analysis,
+        build_index,
         mcmc_chain_results,
         mcmc_aggregate,
         cv_fold_results,
@@ -1495,60 +1464,6 @@ defs = dg.Definitions(
         nrp_run_start_to_slack,
         sobol_automation_sensor,
     ],
-    resources={
-        # S3 client. Configure endpoint_url for non-AWS S3-compatible stores
-        # (the project's existing oss.resilientservice.mooo.com works this way).
-        "s3": S3Resource(
-            aws_access_key_id=dg.EnvVar("AWS_ACCESS_KEY_ID"),
-            aws_secret_access_key=dg.EnvVar("AWS_SECRET_ACCESS_KEY"),
-            endpoint_url=dg.EnvVar("S3_ENDPOINT_URL"),
-            region_name=dg.EnvVar("AWS_DEFAULT_REGION"),
-        ),
-        # IO manager for asset persistence. On NRP (DAGSTER_S3_BUCKET set)
-        # this is S3; locally it falls back to a filesystem IO manager so
-        # `dagster dev` / `dg launch` work end-to-end without S3.
-        "s3_io": (
-            S3PickleIOManager(
-                s3_resource=S3Resource(
-                    aws_access_key_id=dg.EnvVar("AWS_ACCESS_KEY_ID"),
-                    aws_secret_access_key=dg.EnvVar("AWS_SECRET_ACCESS_KEY"),
-                    endpoint_url=dg.EnvVar("S3_ENDPOINT_URL"),
-                ),
-                s3_bucket=dg.EnvVar("DAGSTER_S3_BUCKET"),
-                s3_prefix="dagster/runs",
-            )
-            if os.getenv("DAGSTER_S3_BUCKET")
-            else dg.FilesystemIOManager(
-                base_dir=os.getenv(
-                    "DAGSTER_LOCAL_IO_DIR",
-                    str(Path(__file__).resolve().parent.parent / ".dagster_io"),
-                ),
-            )
-        ),
-        # Slack webhook sender. Reuses the same env vars as the existing
-        # alert system. Optional: os.getenv with a "" default so the
-        # resource initialises locally (the sender logs+drops on an empty
-        # URL) instead of failing EnvVar resolution when unset.
-        "slack": SlackWebhookResource(
-            watch_webhook_url=os.getenv("SLACK_WEBHOOK_WATCH", ""),
-            critical_webhook_url=os.getenv("SLACK_WEBHOOK_CRITICAL", ""),
-        ),
-    },
-    # Use K8s step executor when KUBERNETES_SERVICE_HOST is set (in-cluster or
-    # local dev pointing at NRP via kubeconfig). load_incluster_config is True
-    # only inside a real pod (SA token present); locally it falls back to
-    # ~/.kube/config so `kubectl` context determines the target cluster.
-    executor=k8s_job_executor.configured(
-        {
-            "job_namespace": {"env": "NRP_NAMESPACE"},
-            "image_pull_policy": "IfNotPresent",
-            "service_account_name": "dagster-nrp",
-            "max_concurrent": 100,
-            "load_incluster_config": os.path.exists(
-                "/var/run/secrets/kubernetes.io/serviceaccount/token",
-            ),
-        },
-    )
-    if os.getenv("KUBERNETES_SERVICE_HOST")
-    else dg.multiprocess_executor,
+    resources=make_resources(),
+    executor=make_executor(max_concurrent=100),
 )

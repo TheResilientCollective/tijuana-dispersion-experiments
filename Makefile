@@ -18,10 +18,11 @@ IMAGE    := nrp-worker
 
 GIT_SHA := $(shell git rev-parse --short HEAD)
 
-IMAGE_TAG_SHA := $(REGISTRY)/$(ORG)/$(IMAGE):$(GIT_SHA)
-IMAGE_TAG_DEV := $(REGISTRY)/$(ORG)/$(IMAGE):dev
-IMAGE_TAG_HYSPLIT_SHA := $(REGISTRY)/$(ORG)/$(IMAGE):$(GIT_SHA)-hysplit
-IMAGE_TAG_HYSPLIT_DEV := $(REGISTRY)/$(ORG)/$(IMAGE):dev-hysplit
+IMAGE_BASE := $(REGISTRY)/$(ORG)/$(IMAGE)
+IMAGE_TAG_SHA := $(IMAGE_BASE):$(GIT_SHA)
+IMAGE_TAG_DEV := $(IMAGE_BASE):dev
+IMAGE_TAG_HYSPLIT_SHA := $(IMAGE_BASE):$(GIT_SHA)-hysplit
+IMAGE_TAG_HYSPLIT_DEV := $(IMAGE_BASE):dev-hysplit
 
 # Base image for the worker-hysplit stage: the ONE image carrying the
 # registered HYSPLIT (private — GH_TOKEN needs read:packages on center4health).
@@ -70,8 +71,9 @@ docker-build:
 			--secret id=gh_token,env=GH_TOKEN \
 			-t $(IMAGE_TAG_SHA) \
 			-t $(IMAGE_TAG_DEV) \
+			-t $(IMAGE_BASE):latest \
 			. ; \
-		echo "Built + tagged: $(IMAGE_TAG_SHA) , :dev"'
+		echo "Built + tagged: $(IMAGE_TAG_SHA) , :dev , :latest"'
 
 # Worker image for saturn_nestor_job, derived FROM $(HYSPLIT_BASE) — the
 # geodemichysplit image plus the nrp code/env (docker login ghcr.io needed).
@@ -104,9 +106,8 @@ docker-push:
 			echo "✗ $(IMAGE_TAG_SHA) not built yet — run: make docker-build"; exit 1; \
 		fi; \
 		echo "$$GITLAB_TOKEN" | docker login $(REGISTRY) -u "$$GITLAB_USER" --password-stdin; \
-		docker push $(IMAGE_TAG_SHA); \
-		docker push $(IMAGE_TAG_DEV); \
-		echo "✓ Pushed $(IMAGE_TAG_SHA) and :dev"; \
+		docker push --all-tags $(IMAGE_BASE); \
+		echo "✓ Pushed all local $(IMAGE_BASE) tags ($(GIT_SHA), dev, latest)"; \
 		echo "  Pin the digest for Helm/.env:"; \
 		echo "  DAGSTER_IMAGE=$$(docker inspect --format='"'"'{{index .RepoDigests 0}}'"'"' $(IMAGE_TAG_SHA))"'
 

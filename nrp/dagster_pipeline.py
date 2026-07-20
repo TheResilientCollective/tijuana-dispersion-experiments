@@ -39,6 +39,7 @@ assets," "io_manager," "resources," "sensors."
 import json as _json
 import logging
 import os
+import time
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -76,12 +77,25 @@ sobol_partitions = dg.StaticPartitionsDefinition([f"chunk_{i:03d}" for i in rang
 
 mcmc_partitions = dg.StaticPartitionsDefinition([f"chain_{i:02d}" for i in range(8)])
 
-KNOWN_EVENTS = [
-    "2024_12_02_smugglers_gulch",
-    "2026_02_10_stewarts_drain",
-    "2026_03_14_stewarts_drain",
-    # ... add events as documented
-]
+# Leave-one-event-out CV registry. Each event maps to the calibration
+# `window` it lives in and the `holdout` sub-range to exclude when fitting
+# and then predict. Add events (with their windows) as documented; folds
+# whose window data isn't in the baked parquet skip gracefully.
+CV_EVENTS: dict[str, dict[str, tuple[str, str]]] = {
+    "2026_03_14_stewarts_drain": {
+        "window": ("2026-03-13", "2026-03-16"),
+        "holdout": ("2026-03-14", "2026-03-15"),
+    },
+    "2026_02_10_stewarts_drain": {
+        "window": ("2026-02-08", "2026-02-11"),
+        "holdout": ("2026-02-10", "2026-02-11"),
+    },
+    "2024_12_02_smugglers_gulch": {
+        "window": ("2024-12-01", "2024-12-04"),
+        "holdout": ("2024-12-02", "2024-12-03"),
+    },
+}
+KNOWN_EVENTS = list(CV_EVENTS)
 cv_fold_partitions = dg.StaticPartitionsDefinition(KNOWN_EVENTS)
 
 
@@ -111,6 +125,80 @@ _AGGREGATOR_K8S_TAGS = {
         },
     },
 }
+
+# MCMC runs ONE SMC chain per partition/pod (see mcmc_chain_results), so
+# each pod is single-process (cores=1) and gets the full memory to itself —
+# no cross-chain contention. 8Gi was generous for a single-window chain
+# (216 obs) but pooled 4-window chains (855 obs, 17 params) were observed
+# at 12.5Gi mid-run at 500 particles (OOMKilled at 8Gi 2026-07-11; 16Gi
+# marginal 2026-07-13). 32Gi covers the SMC stage-history growth.
+_MCMC_K8S_TAGS = {
+    "dagster-k8s/config": {
+        "container_config": {
+            "resources": {
+                "requests": {"cpu": "1", "memory": "12Gi"},
+                "limits": {"cpu": "2", "memory": "32Gi"},
+            },
+        },
+    },
+}
+
+# Reserved-node scheduling (NRP reservation grant, 2026-07-14; see
+# https://nrp.ai/documentation/userdocs/running/special/). When
+# NRP_RESERVATION is set on the code location, the heavy (nrp_heavy pool)
+# pods tolerate the reservation taint AND pin to those nodes via node
+# affinity, so they never compete on the general preemptible pool. Unset
+# => default untainted-node scheduling under the 4-pod courtesy cap.
+# Changing the value needs only a deployment env change, not a rebuild.
+_NRP_RESERVATION = os.getenv("NRP_RESERVATION")
+if _NRP_RESERVATION:
+    _RESERVATION_POD_SPEC = {
+        "tolerations": [
+            {
+                "key": "nautilus.io/reservation",
+                "operator": "Equal",
+                "value": _NRP_RESERVATION,
+                "effect": "NoSchedule",
+            },
+        ],
+        "affinity": {
+            "node_affinity": {
+                "required_during_scheduling_ignored_during_execution": {
+                    "node_selector_terms": [
+                        {
+                            "match_expressions": [
+                                {
+                                    "key": "nautilus.io/reservation",
+                                    "operator": "In",
+                                    "values": [_NRP_RESERVATION],
+                                },
+                            ],
+                        },
+                    ],
+                },
+            },
+        },
+    }
+    _MCMC_K8S_TAGS["dagster-k8s/config"]["pod_spec_config"] = _RESERVATION_POD_SPEC
+    _AGGREGATOR_K8S_TAGS["dagster-k8s/config"]["pod_spec_config"] = _RESERVATION_POD_SPEC
+
+# NRP worker nodes are preemptible — long step pods (multi-hour SMC chains,
+# CV folds) get reaped mid-run. A step-level retry makes the step relaunch
+# on a fresh pod instead of failing the partition, so backfills self-heal
+# instead of needing manual re-submission. delay lets the scheduler settle.
+_PREEMPT_RETRY = dg.RetryPolicy(max_retries=5, delay=60)
+
+
+def _archive_prefix(kind: str, tag: str) -> str:
+    """S3 key prefix for a durable per-run archive: ``<root>/<kind>/<tag>``.
+
+    The root defaults to ``runs`` and is overridable via the
+    ``S3_ARCHIVE_PREFIX`` env var, so where results are published is a
+    deployment parameter rather than hardcoded. Bucket + endpoint are
+    already env (``DAGSTER_S3_BUCKET`` / ``S3_ENDPOINT_URL``).
+    """
+    root = os.getenv("S3_ARCHIVE_PREFIX", "runs").strip("/")
+    return f"{root}/{kind}/{tag}"
 
 
 # ============================================================
@@ -147,19 +235,53 @@ class McmcConfig(dg.Config):
     partition; the aggregator collects all chains and computes diagnostics.
     """
 
-    n_chains: int = 9
-    n_draws: int = 5000
-    n_tune: int = 2500
+    # SMC config. n_draws is the number of SMC *particles* per chain (not
+    # NUTS draws); n_tune is unused under SMC (no separate tuning phase)
+    # and kept only so older call sites don't break. Each particle costs a
+    # full dispersion forward run over the window, so scale deliberately.
+    n_chains: int = 4
+    n_draws: int = 2000
+    n_tune: int = 0
     seed: int = 42
     window_start: str = sobol.DEFAULT_WINDOW[0]
     window_end: str = sobol.DEFAULT_WINDOW[1]
     obs_sigma: float = 10.0
+    # Mixing-height experiment (docs/mixing_height_experiment.md). Both
+    # default off => 11-param, fixed-sigma baseline (unchanged). Enable for
+    # the treatment run: fit a nocturnal mixing-height lid and/or per-receptor
+    # observation noise.
+    mixing_height: bool = False
+    mixing_height_day_m: float = 1500.0
+    fit_obs_sigma: bool = False
+    sigma_prior_scale: float = 30.0
+    # Drainage-box treatment (calibration_status.md 2026-07-11, Saturn Blvd
+    # culvert mechanism). Off => baseline unchanged. On => 4 extra fitted
+    # params (a_ebb, drainage_lambda_along_m, drainage_lambda_cross_m,
+    # box_tau_h); the bearing and the ebb source stay fixed (identified by
+    # field knowledge, not fitted).
+    drainage_box: bool = False
+    drainage_bearing_deg: float = 280.0
+    ebb_source: str = "Saturn Blvd Bridge"
+    # Flow-turbulence term (Frobenius et al. 2026): 2 extra fitted params
+    # (a_flow, flow_threshold_m3s). Only identifiable across windows with
+    # flow contrast — leave off for constant-flow windows like Mar 13-16.
+    flow_turbulence: bool = False
+    # Multi-window calibration: additional [start, end] windows pooled into
+    # the SAME likelihood as (window_start, window_end). Empty => the
+    # single-window behaviour, unchanged. Windows are loaded independently
+    # (per-window tide gradients) and concatenated — see
+    # sobol.load_windows_concat.
+    extra_windows: list[list[str]] = []
+    # Held-out validation: [start, end] windows NEVER in the likelihood;
+    # the aggregate scores posterior-predictive skill on them separately.
+    validation_windows: list[list[str]] = []
 
 
 @dg.asset(
     partitions_def=sobol_partitions,
     group_name="sobol_sensitivity",
     op_tags=_WORKER_K8S_TAGS,
+    retry_policy=_PREEMPT_RETRY,
     io_manager_key="s3_io",
 )
 def sobol_chunk_results(
@@ -179,6 +301,17 @@ def sobol_chunk_results(
     samples = sobol.build_samples(config.n_base_samples, seed=config.seed)
     bounds = sobol.chunk_bounds(samples.shape[0], N_SOBOL_CHUNKS)
     start, end = bounds[chunk_idx]
+
+    # Carry the run config in the chunk's own value. Downstream assets
+    # (sobol_aggregate → sobol_post_analysis) read it from the data instead
+    # of run config, so declarative-automation runs — which get no run
+    # config — still tag the archive with the correct window/N/seed.
+    cfg_meta = {
+        "window_start": config.window_start,
+        "window_end": config.window_end,
+        "n_base_samples": config.n_base_samples,
+        "seed": config.seed,
+    }
     log.info(
         "sobol chunk %s: rows [%d, %d) of %d",
         context.partition_key,
@@ -190,7 +323,14 @@ def sobol_chunk_results(
     if start == end:
         # Empty chunk (n_samples < N_SOBOL_CHUNKS): valid, returns no rows.
         return dg.MaterializeResult(
-            value={"start": start, "end": end, "param_names": [], "metric_columns": [], "rows": []},
+            value={
+                "start": start,
+                "end": end,
+                "param_names": [],
+                "metric_columns": [],
+                "rows": [],
+                "config": cfg_meta,
+            },
             metadata={"n_samples": 0, "row_start": start, "row_end": end},
         )
 
@@ -213,6 +353,7 @@ def sobol_chunk_results(
             "param_names": problem["names"],
             "metric_columns": sobol.OUTPUT_COLUMNS,
             "rows": rows,
+            "config": cfg_meta,
         },
         metadata={
             "n_samples": len(rows),
@@ -226,8 +367,15 @@ def sobol_chunk_results(
 @dg.asset(
     group_name="sobol_sensitivity",
     op_tags=_AGGREGATOR_K8S_TAGS,
+    pool="nrp_heavy",  # non-exempt (2 CPU/8Gi) — bound by the NRP 4-pod limit
+    retry_policy=_PREEMPT_RETRY,
     io_manager_key="s3_io",
     required_resource_keys={"slack"},
+    # Self-driving: materialise once all 100 chunk partitions are present
+    # and at least one is newly updated (eager holds until no dep is
+    # missing). Kicking off the chunk backfill is the only manual step;
+    # aggregation then fires automatically — no more manual `dg launch`.
+    automation_condition=dg.AutomationCondition.eager(),
     ins={
         "chunks": dg.AssetIn(
             "sobol_chunk_results",
@@ -251,6 +399,9 @@ def sobol_aggregate(
 
     asm = sobol.reassemble(chunks)
     param_names = asm["param_names"]
+    # Config travels with the data (every chunk carries an identical copy),
+    # so post-analysis can tag the archive correctly under automation.
+    run_cfg = next(iter(chunks.values()), {}).get("config")
     problem = sobol.build_problem()
     frames: list[Any] = []
     for m in asm["metric_columns"]:
@@ -275,7 +426,7 @@ def sobol_aggregate(
     )
 
     return dg.MaterializeResult(
-        value={"indices": indices.to_dict(orient="records")},
+        value={"indices": indices.to_dict(orient="records"), "config": run_cfg},
         metadata={
             "n_samples": asm["n_samples"],
             "n_metrics_analysed": len(frames),
@@ -293,8 +444,12 @@ def sobol_aggregate(
 @dg.asset(
     group_name="sobol_sensitivity",
     op_tags=_AGGREGATOR_K8S_TAGS,
+    pool="nrp_heavy",  # non-exempt (2 CPU/8Gi) — bound by the NRP 4-pod limit
+    retry_policy=_PREEMPT_RETRY,
     io_manager_key="s3_io",
     # required_resource_keys={"s3"},
+    # Self-driving: fire as soon as sobol_aggregate is (re)materialised.
+    automation_condition=dg.AutomationCondition.eager(),
     ins={"sobol_aggregate": dg.AssetIn("sobol_aggregate")},
 )
 def sobol_post_analysis(
@@ -332,12 +487,15 @@ def sobol_post_analysis(
     inter = sobol.interaction_table(indices)
     drops = sobol.dropout_candidates(indices)
 
-    tag = sobol.run_tag(
-        config.window_start,
-        config.window_end,
-        config.n_base_samples,
-        config.seed,
-    )
+    # Prefer config carried with the data (correct under automation, where
+    # there is no run config); fall back to run config for manual launches.
+    carried = sobol_aggregate.get("config") or {}
+    window_start = carried.get("window_start", config.window_start)
+    window_end = carried.get("window_end", config.window_end)
+    n_base_samples = carried.get("n_base_samples", config.n_base_samples)
+    seed = carried.get("seed", config.seed)
+
+    tag = sobol.run_tag(window_start, window_end, n_base_samples, seed)
 
     # ----- archival snapshot to s3://<bucket>/runs/sobol/{tag}/ -----
     bucket = os.getenv("DAGSTER_S3_BUCKET")
@@ -346,20 +504,20 @@ def sobol_post_analysis(
     archived: dict[str, str] = {}
     if bucket:
         s3_client = s3.get_client()  # boto3 client
-        prefix = f"runs/sobol/{tag}"
+        prefix = _archive_prefix("sobol", tag)
         # 1) indices, full table
         buf_p = io.BytesIO()
         indices.to_parquet(buf_p, index=False)
         s3_client.put_object(
             Bucket=bucket, Key=f"{prefix}/sobol_indices.parquet", Body=buf_p.getvalue()
         )
-        archived["indices"] = f"runs/sobol/{tag}/sobol_indices.parquet"
+        archived["indices"] = f"{prefix}/sobol_indices.parquet"
         # 2) diagnostics + summaries, machine-readable
         analysis = {
             "tag": tag,
-            "window": [config.window_start, config.window_end],
-            "n_base_samples": config.n_base_samples,
-            "seed": config.seed,
+            "window": [window_start, window_end],
+            "n_base_samples": n_base_samples,
+            "seed": seed,
             "convergence": diag,
             "global_ranking": glob.to_dict(orient="records"),
             "top_n_per_metric": topn.to_dict(orient="records"),
@@ -373,12 +531,12 @@ def sobol_post_analysis(
             Key=f"{prefix}/analysis.json",
             Body=_json.dumps(analysis, indent=2).encode(),
         )
-        archived["analysis"] = f"runs/sobol/{tag}/analysis.json"
+        archived["analysis"] = f"{prefix}/analysis.json"
         # 3) human-readable summary
         md = (
             f"# Sobol run `{tag}`\n\n"
-            f"window: **{config.window_start} → {config.window_end}** | "
-            f"N={config.n_base_samples} | seed={config.seed}\n\n"
+            f"window: **{window_start} → {window_end}** | "
+            f"N={n_base_samples} | seed={seed}\n\n"
             f"**Converged: {diag['is_converged']}** "
             f"(median ST_conf/|ST| {diag['st_conf_over_st_median']:.3f}, "
             f"p90 {diag['st_conf_over_st_p90']:.3f}, "
@@ -396,14 +554,14 @@ def sobol_post_analysis(
             f"{drops or '(none)'}\n"
         )
         s3_client.put_object(Bucket=bucket, Key=f"{prefix}/summary.md", Body=md.encode())
-        archived["summary"] = f"runs/sobol/{tag}/summary.md"
+        archived["summary"] = f"{prefix}/summary.md"
         # 4) manifest (self-describing metadata + artifact pointers)
         manifest = RunManifest(
             kind="sobol",
             tag=tag,
-            window=[config.window_start, config.window_end],
-            n_base_samples=config.n_base_samples,
-            seed=config.seed,
+            window=[window_start, window_end],
+            n_base_samples=n_base_samples,
+            seed=seed,
             git_sha=git_sha,
             image_digest=image_digest,
             status="complete",
@@ -450,6 +608,8 @@ def sobol_post_analysis(
 @dg.asset(
     group_name="reporting",
     op_tags=_AGGREGATOR_K8S_TAGS,
+    pool="nrp_heavy",  # non-exempt (2 CPU/8Gi) — bound by the NRP 4-pod limit
+    retry_policy=_PREEMPT_RETRY,
     io_manager_key="s3_io",
     required_resource_keys={"s3"},
 )
@@ -472,7 +632,7 @@ def build_index(
             metadata={"status": "skipped (no S3 bucket)"},
         )
 
-    s3_client = context.resources.s3.get_client()
+    s3_client = context.resources.s3  # dagster-aws sets context.resources.s3 to the boto3 client
 
     # Aggregate all manifests
     ledger = build_ledger(s3_client, bucket)
@@ -513,25 +673,50 @@ def build_index(
 # MCMC workload
 # ============================================================
 
-# The 9 calibration metrics (3 fit types × 3 receptors) that observations and
-# forward-model output are keyed by. Used to shape placeholder scaffolding until
-# load_obs_for_window / the real forward model are wired in (see TODOs below).
-_CALIBRATION_METRICS = [
-    "rms__SAN YSIDRO",
-    "rms__NESTOR - BES",
-    "rms__IB CIVIC CTR",
-    "peak_ratio__SAN YSIDRO",
-    "peak_ratio__NESTOR - BES",
-    "peak_ratio__IB CIVIC CTR",
-    "corr__SAN YSIDRO",
-    "corr__NESTOR - BES",
-    "corr__IB CIVIC CTR",
-]
+
+def _treatment_forward_kwargs(
+    x: dict[str, float],
+    *,
+    mixing_height: bool,
+    drainage_box: bool,
+    flow_turbulence: bool,
+    mixing_height_day_m: float = 1500.0,
+    drainage_bearing_deg: float = 280.0,
+    ebb_source: str = "Saturn Blvd Bridge",
+) -> dict[str, Any]:
+    """Map sampled treatment params ``x`` to predict_concentrations kwargs.
+
+    Shared by the chain likelihood, the aggregate posterior-predictive,
+    and the CV folds so the treatment forward model is defined once.
+    Flags off ⇒ the corresponding kwargs are omitted (library defaults,
+    baseline path untouched).
+    """
+    kw: dict[str, Any] = {}
+    if mixing_height:
+        kw["mixing_height_night_m"] = float(x["mixing_height_night_m"])
+        kw["mixing_height_day_m"] = mixing_height_day_m
+    if drainage_box:
+        kw.update(
+            a_ebb=float(x["a_ebb"]),
+            ebb_source_names=(ebb_source,),
+            drainage_lambda_along_m=float(x["drainage_lambda_along_m"]),
+            drainage_lambda_cross_m=float(x["drainage_lambda_cross_m"]),
+            drainage_bearing_deg=drainage_bearing_deg,
+            box_tau_h=float(x["box_tau_h"]),
+        )
+    if flow_turbulence:
+        kw["a_flow"] = float(x["a_flow"])
+        kw["flow_threshold_m3s"] = float(x["flow_threshold_m3s"])
+        kw.setdefault("ebb_source_names", (ebb_source,))
+    return kw
 
 
 @dg.asset(
+    partitions_def=mcmc_partitions,
     group_name="mcmc_posterior",
-    op_tags=_WORKER_K8S_TAGS,
+    op_tags=_MCMC_K8S_TAGS,
+    pool="nrp_heavy",  # non-exempt (2 CPU/8Gi) — bound by the NRP 4-pod limit
+    retry_policy=_PREEMPT_RETRY,
     io_manager_key="s3_io",
     required_resource_keys={"s3"},
     ins={"sobol_aggregate": dg.AssetIn("sobol_aggregate")},
@@ -541,100 +726,459 @@ def mcmc_chain_results(
     config: McmcConfig,
     sobol_aggregate: dict[str, Any],
 ) -> dict[str, Any]:
-    """Run MCMC posterior sampling using Sobol-informed priors.
+    """Run ONE SMC chain (this partition) of the MCMC calibration.
 
-    Samples 9 chains × 5000 draws over 11 emission parameters.
-    Uses Sobol ST indices to set prior widths: high-ST → tight,
-    low-ST → wide. Likelihood is a normal fit to the 9 metrics
-    (3 receptors × 3 fit types).
+    One partition = one independent chain, each in its own K8s pod (the
+    README's fan-out design). This isolates each chain's memory — the
+    single-pod, all-chains-at-once approach OOMKilled at 8Gi. Chains
+    differ only by seed (``config.seed + chain_idx``); mcmc_aggregate
+    concatenates them for cross-chain Rhat/ESS.
 
-    Returns ArviZ InferenceData as a pickled dict.
+    Uses Sobol-informed priors and the published tijuana_dispersion
+    forward model (via sobol.predict_concentrations) against the observed
+    H2S series. Returns a single-chain ArviZ InferenceData as a dict.
     """
-    import arviz as az
+    chain_idx = int(context.partition_key.split("_")[1])
+    chain_seed = config.seed + chain_idx
 
+    # Real observations + forward model, reusing the exact Sobol machinery
+    # so the calibration science is identical to the sensitivity analysis.
+    # Multi-window calibration pools every fit window into one likelihood.
+    fit_windows = [
+        (config.window_start, config.window_end),
+        *[(w[0], w[1]) for w in config.extra_windows],
+    ]
+    drivers, met, obs_mat = sobol.load_windows_concat(fit_windows)
+    valid = ~np.isnan(obs_mat)
+    obs_flat = obs_mat[valid]
+    if obs_flat.size == 0:
+        raise ValueError("No H2S observations in the window — cannot calibrate.")
+
+    param_names = list(sobol.PARAM_RANGES)
+
+    # Observability (2026-07-16): chain runtime = stages × evals/stage ×
+    # s/eval, and none of the three were visible — 9 h chains logged
+    # nothing between "Sampling 1 chain" and completion. A ~5-minute
+    # heartbeat decomposes it live; the post-run summary (below) records
+    # the totals durably in the chain's config dict.
+    _t0 = time.monotonic()
+    _ev = {"n": 0, "fwd_s": 0.0, "last_log": _t0, "last_n": 0}
+
+    def forward_model_fn(params: dict[str, float]) -> np.ndarray:
+        """Concrete param dict → predicted concentrations at the valid obs points."""
+        row = np.array([params[n] for n in param_names], dtype=float)
+        # Treatment-only params are present in `params` only when their
+        # treatment is on; the helper maps them to forward kwargs.
+        kw = _treatment_forward_kwargs(
+            params,
+            mixing_height=config.mixing_height,
+            drainage_box=config.drainage_box,
+            flow_turbulence=config.flow_turbulence,
+            mixing_height_day_m=config.mixing_height_day_m,
+            drainage_bearing_deg=config.drainage_bearing_deg,
+            ebb_source=config.ebb_source,
+        )
+        t = time.monotonic()
+        pred = sobol.predict_concentrations(row, param_names, drivers, met, **kw)
+        now = time.monotonic()
+        _ev["fwd_s"] += now - t
+        _ev["n"] += 1
+        if now - _ev["last_log"] >= 300.0:
+            window_rate = (_ev["n"] - _ev["last_n"]) / (now - _ev["last_log"])
+            elapsed_h = (now - _t0) / 3600.0
+            try:
+                import resource
+
+                rss_gib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024**2)
+            except Exception:
+                rss_gib = float("nan")
+            # print (not context.log): heartbeats belong in the pod log,
+            # not as thousands of rows in the Dagster event DB.
+            print(
+                f"SMC heartbeat: {_ev['n']} forward evals in {elapsed_h:.2f} h"
+                f" | {window_rate:.2f} evals/s (5-min window)"
+                f" | mean {1000 * _ev['fwd_s'] / max(_ev['n'], 1):.0f} ms/eval"
+                f" | fwd share {100 * _ev['fwd_s'] / max(now - _t0, 1e-9):.0f}%"
+                f" | rss {rss_gib:.2f} GiB",
+                flush=True,
+            )
+            _ev["last_log"] = now
+            _ev["last_n"] = _ev["n"]
+        return pred[valid]
+
+    # Sobol-informed priors from THIS study's ST indices (not a hardcoded table).
+    # Treatment (docs/mixing_height_experiment.md) optionally adds the lid param
+    # and/or per-receptor fittable observation noise; baseline leaves both off.
+    sobol_indices = pd.DataFrame(sobol_aggregate["indices"])
+    priors = mcmc.build_priors(
+        sobol_indices=sobol_indices,
+        include_mixing_height=config.mixing_height,
+        include_drainage_box=config.drainage_box,
+        include_flow_turbulence=config.flow_turbulence,
+    )
     context.log.info(
-        f"MCMC sampling: {config.n_chains} chains × {config.n_draws - config.n_tune} "
-        f"posterior draws (+ {config.n_tune} tune)"
+        "MCMC chain %s (seed %d): %d obs points over %d window(s), %d fwd params;"
+        " SMC × %d particles"
+        " | mixing_height=%s fit_obs_sigma=%s drainage_box=%s flow_turbulence=%s (windows %s)",
+        context.partition_key,
+        chain_seed,
+        obs_flat.size,
+        len(fit_windows),
+        len(priors),
+        config.n_draws,
+        config.mixing_height,
+        config.fit_obs_sigma,
+        config.drainage_box,
+        config.flow_turbulence,
+        fit_windows,
     )
 
-    # Build priors from Sobol baseline
-    priors = mcmc.build_priors()
-    context.log.info(f"Priors: {len(priors)} parameters")
-    for p, spec in priors.items():
-        context.log.info(f"  {p}: {spec.dist_type}")
-
-    # TODO: Load observation data for the window
-    # For now, placeholder: forward_model_fn needs to be wired to the actual model
-    # obs = load_obs_for_window(config.window_start, config.window_end)
-    obs = {k: np.random.randn(100) for k in _CALIBRATION_METRICS}  # random ok: placeholder
-
-    # TODO: Wire forward_model_fn to the actual dispersion model
-    def forward_model_fn(params):
-        return {k: np.random.randn(100) for k in obs}  # random ok: placeholder
-
-    model = mcmc.build_model(obs, forward_model_fn, priors, obs_sigma=config.obs_sigma)
+    if config.fit_obs_sigma:
+        # Map each valid obs point to its receptor column for per-receptor σ.
+        rec_full = np.broadcast_to(np.arange(len(sobol.RECEPTOR_NAMES)), obs_mat.shape)
+        obs_receptor_idx = rec_full[valid]
+        model = mcmc.build_model(
+            obs_flat,
+            forward_model_fn,
+            priors,
+            obs_receptor_idx=obs_receptor_idx,
+            n_receptors=len(sobol.RECEPTOR_NAMES),
+            sigma_prior_scale=config.sigma_prior_scale,
+        )
+    else:
+        model = mcmc.build_model(obs_flat, forward_model_fn, priors, obs_sigma=config.obs_sigma)
+    # One chain per pod — chains=1. Cross-chain diagnostics happen in the aggregate.
     idata = mcmc.sample_posterior(
         model,
-        n_chains=config.n_chains,
+        n_chains=1,
         n_draws=config.n_draws,
-        n_tune=config.n_tune,
-        seed=config.seed,
+        seed=chain_seed,
     )
 
-    context.log.info("MCMC sampling complete; computing diagnostics...")
-    diag = mcmc.diagnostics(idata)
+    # Post-run SMC anatomy: stages × evals × s/eval — the "why was this
+    # chain slow" record. Stage count / beta come from sample_stats when
+    # pymc exposes them (best-effort; never fail the chain over it).
+    wall_s = time.monotonic() - _t0
+    smc_stats: dict[str, Any] = {
+        "n_forward_evals": int(_ev["n"]),
+        "wall_s": round(wall_s, 1),
+        "fwd_s": round(_ev["fwd_s"], 1),
+        "mean_ms_per_eval": round(1000.0 * _ev["fwd_s"] / max(_ev["n"], 1), 2),
+        "fwd_share": round(_ev["fwd_s"] / max(wall_s, 1e-9), 3),
+    }
+    try:
+        ss = idata.sample_stats
+        for k in ("beta", "accept_rate", "log_marginal_likelihood"):
+            if k in ss:
+                vals = np.asarray(ss[k].values).ravel()
+                smc_stats[f"{k}_final"] = float(vals[-1])
+                smc_stats[f"n_{k}_records"] = int(vals.size)
+    except Exception as exc:  # observability must never kill the science
+        context.log.warning("SMC stats extraction skipped: %s", exc)
+    context.log.info(
+        "MCMC chain %s complete: %.1f h wall, %d fwd evals (%.0f ms/eval, fwd share %.0f%%)",
+        context.partition_key,
+        wall_s / 3600.0,
+        smc_stats["n_forward_evals"],
+        smc_stats["mean_ms_per_eval"],
+        100 * smc_stats["fwd_share"],
+    )
 
     return {
-        "idata": az.to_dict(idata),
-        "diagnostics": diag,
+        "idata": idata.to_dict(),
         "config": {
-            "n_chains": config.n_chains,
-            "n_draws_posterior": config.n_draws - config.n_tune,
-            "n_tune": config.n_tune,
-            "seed": config.seed,
+            "chain": context.partition_key,
+            "chain_idx": chain_idx,
+            "n_particles": config.n_draws,
+            "seed": chain_seed,
+            "base_seed": config.seed,
             "window": [config.window_start, config.window_end],
+            "obs_sigma": config.obs_sigma,
+            "n_obs": int(obs_flat.size),
+            "mixing_height": config.mixing_height,
+            "fit_obs_sigma": config.fit_obs_sigma,
+            "drainage_box": config.drainage_box,
+            "drainage_bearing_deg": config.drainage_bearing_deg,
+            "ebb_source": config.ebb_source,
+            "flow_turbulence": config.flow_turbulence,
+            "extra_windows": [list(w) for w in config.extra_windows],
+            "validation_windows": [list(w) for w in config.validation_windows],
+            "smc_stats": smc_stats,
         },
     }
 
 
 @dg.asset(
-    deps=[mcmc_chain_results],
     group_name="mcmc_posterior",
     op_tags=_AGGREGATOR_K8S_TAGS,
+    pool="nrp_heavy",  # non-exempt (2 CPU/8Gi) — bound by the NRP 4-pod limit
+    retry_policy=_PREEMPT_RETRY,
     io_manager_key="s3_io",
     required_resource_keys={"s3", "slack"},
+    ins={
+        "chains": dg.AssetIn(
+            "mcmc_chain_results",
+            partition_mapping=dg.AllPartitionMapping(),
+        ),
+    },
 )
 def mcmc_aggregate(
     context: AssetExecutionContext,
-    config: McmcConfig,
-    mcmc_chain_results: dict[str, Any],
+    chains: dict[str, dict[str, Any]],
 ) -> dg.MaterializeResult:
-    """Aggregate MCMC results and surface diagnostics.
+    """Combine the per-chain posteriors and compute cross-chain diagnostics.
 
-    Computes Rhat, effective sample size, and posterior predictive
-    performance on a held-out window (if available).
+    ``chains`` is ``{chain_NN: chain_value}`` for every partition. Each
+    chain ran single-chain SMC in its own pod; here we concatenate them
+    along the chain dimension so Rhat/ESS (which need ≥2 chains) are
+    meaningful. The combined posterior is the calibration result.
     """
+    import io
 
-    diag = mcmc_chain_results.get("diagnostics", {})
-    config_dict = mcmc_chain_results.get("config", {})
+    import arviz as az
 
-    context.log.info(f"MCMC aggregate: {len(diag)} parameters")
-    converged = diag.get("_summary", {}).get("all_converged", False)
-    max_rhat = diag.get("_summary", {}).get("max_rhat", float("inf"))
+    slack: SlackWebhookResource = context.resources.slack
 
-    context.log.info(f"Convergence: {'✓' if converged else '✗'} (max Rhat: {max_rhat:.4f})")
+    ordered = sorted(chains.items())  # deterministic chain order
+    idatas = [az.from_dict(posterior=v["idata"]["posterior"]) for _, v in ordered]
+    combined = az.concat(idatas, dim="chain")
+    cfg = ordered[0][1].get("config", {})  # identical across chains except seed
+    n_chains = len(ordered)
+
+    diag = mcmc.diagnostics(combined)
+    summary = diag["_summary"]
+    converged = summary["all_converged"]
+    max_rhat = summary["max_rhat"]
+
+    # ----- posterior summary + bound-railing -----
+    summ_df = (
+        az.summary(combined, hdi_prob=0.94).reset_index().rename(columns={"index": "parameter"})
+    )
+    railing = mcmc.bound_railing(summ_df, sobol.PARAM_RANGES)
+
+    # ----- posterior-predictive skill (best-effort; needs the forward model) -----
+    window = cfg.get("window", list(sobol.DEFAULT_WINDOW))
+    fit_windows = [tuple(window), *[tuple(w) for w in cfg.get("extra_windows", [])]]
+    validation_windows = [tuple(w) for w in cfg.get("validation_windows", [])]
+    predictive: list[dict[str, Any]] = []
+    held_out: list[dict[str, Any]] = []
+    try:
+        param_names = list(sobol.PARAM_RANGES)
+        # Treatment posteriors carry extra params — draw them too and feed
+        # them to the treated forward model, else the predictive would
+        # ignore the very effect being tested.
+        treat_mh = bool(cfg.get("mixing_height", False))
+        treat_db = bool(cfg.get("drainage_box", False))
+        treat_ft = bool(cfg.get("flow_turbulence", False))
+        extra = (
+            (["mixing_height_night_m"] if treat_mh else [])
+            + (list(mcmc.DRAINAGE_BOX_PRIOR_RANGES) if treat_db else [])
+            + (list(mcmc.FLOW_TURBULENCE_PRIOR_RANGES) if treat_ft else [])
+        )
+        draw_names = [*param_names, *extra]
+        n_fwd = len(param_names)
+        draws = mcmc.posterior_param_draws(combined, draw_names, n_samples=100)
+
+        def _make_fwd(drivers: list[Any], met: list[Any]):
+            def _fwd(vec: np.ndarray) -> np.ndarray:
+                x = dict(zip(extra, vec[n_fwd:], strict=True))
+                kw = _treatment_forward_kwargs(
+                    x,
+                    mixing_height=treat_mh,
+                    drainage_box=treat_db,
+                    flow_turbulence=treat_ft,
+                    drainage_bearing_deg=float(cfg.get("drainage_bearing_deg", 280.0)),
+                    ebb_source=cfg.get("ebb_source", "Saturn Blvd Bridge"),
+                )
+                return sobol.predict_concentrations(vec[:n_fwd], param_names, drivers, met, **kw)
+
+            return _fwd
+
+        # In-sample skill over the pooled fit windows.
+        drivers, met, obs_mat = sobol.load_windows_concat(fit_windows)
+        predictive = mcmc.predictive_skill(
+            draws, _make_fwd(drivers, met), obs_mat, sobol.RECEPTOR_NAMES
+        )
+
+        # Held-out skill: windows the likelihood never saw, scored per window.
+        for vw in validation_windows:
+            try:
+                v_drivers, v_met, v_obs = sobol.load_windows_concat([vw])
+                for row in mcmc.predictive_skill(
+                    draws, _make_fwd(v_drivers, v_met), v_obs, sobol.RECEPTOR_NAMES
+                ):
+                    held_out.append({"window": f"{vw[0]}→{vw[1]}", **row})
+            except Exception as exc:  # score what we can; report the gap
+                context.log.warning("held-out window %s skipped: %s", vw, exc)
+                held_out.append({"window": f"{vw[0]}→{vw[1]}", "error": str(exc)})
+    except Exception as exc:  # predictive is a bonus — never fail the report over it
+        context.log.warning("posterior-predictive skipped: %s", exc)
+
+    context.log.info(
+        "MCMC aggregate: %d chains, max Rhat %.4f, converged=%s, %d railing param(s)",
+        n_chains,
+        max_rhat,
+        converged,
+        len(railing),
+    )
+
+    # ----- durable archive at runs/mcmc/<tag>/ -----
+    base_seed = cfg.get("base_seed", cfg.get("seed"))
+    n_particles = cfg.get("n_particles")
+    run_date = datetime.now(UTC).strftime("%Y-%m-%d")
+    # Treatment marker so baseline vs mixing-height reports don't collide on
+    # the same day (same window/chains/particles/seed).
+    variant = ""
+    if cfg.get("mixing_height"):
+        variant += "_mhlid"
+    if cfg.get("fit_obs_sigma"):
+        variant += "_fitsig"
+    if cfg.get("drainage_box"):
+        variant += "_drainbox"
+    if cfg.get("flow_turbulence"):
+        variant += "_flowturb"
+    # Multi-window pooled fits mark the window count so tags stay unique
+    # and self-describing (the full window list lives in diagnostics.json).
+    nwin = f"_{len(fit_windows)}win" if len(fit_windows) > 1 else ""
+    tag = (
+        f"{window[0]}_{window[1]}{nwin}_{n_chains}chains_{n_particles}p"
+        f"_seed{base_seed}{variant}_{run_date}"
+    )
+    bucket = os.getenv("DAGSTER_S3_BUCKET")
+    archived: dict[str, str] = {}
+    if bucket:
+        s3c = context.resources.s3  # dagster-aws sets context.resources.s3 to the boto3 client
+        prefix = _archive_prefix("mcmc", tag)
+
+        samples = combined.posterior.to_dataframe().reset_index()
+        buf = io.BytesIO()
+        samples.to_parquet(buf, index=False)
+        s3c.put_object(
+            Bucket=bucket, Key=f"{prefix}/posterior_samples.parquet", Body=buf.getvalue()
+        )
+        archived["posterior_samples"] = f"{prefix}/posterior_samples.parquet"
+
+        s3c.put_object(
+            Bucket=bucket,
+            Key=f"{prefix}/posterior_summary.csv",
+            Body=summ_df.to_csv(index=False).encode(),
+        )
+        archived["posterior_summary"] = f"{prefix}/posterior_summary.csv"
+
+        analysis = {
+            "tag": tag,
+            "window": window,
+            "fit_windows": [list(w) for w in fit_windows],
+            "validation_windows": [list(w) for w in validation_windows],
+            "n_chains": n_chains,
+            "n_particles": n_particles,
+            "base_seed": base_seed,
+            "converged": converged,
+            "max_rhat": max_rhat,
+            "diagnostics": {k: v for k, v in diag.items() if k != "_summary"},
+            "bound_railing": railing,
+            "posterior_predictive": predictive,
+            "held_out_predictive": held_out,
+            # Per-chain SMC anatomy (evals, wall, ms/eval) — the "why was
+            # this run slow" record across the fleet.
+            "chain_timing": {name: v.get("config", {}).get("smc_stats") for name, v in ordered},
+        }
+        s3c.put_object(
+            Bucket=bucket,
+            Key=f"{prefix}/diagnostics.json",
+            Body=_json.dumps(analysis, indent=2, default=str).encode(),
+        )
+        archived["diagnostics"] = f"{prefix}/diagnostics.json"
+
+        rail_md = (
+            "\n".join(f"- `{r['parameter']}` at {r['edge']} bound {r['range']}" for r in railing)
+            or "(none — all parameters interior)"
+        )
+        pred_md = (
+            pd.DataFrame(predictive).to_markdown(index=False)
+            if predictive
+            else "(posterior-predictive not computed)"
+        )
+        windows_md = ", ".join(f"{w[0]}→{w[1]}" for w in fit_windows)
+        held_md = (
+            pd.DataFrame(held_out).to_markdown(index=False)
+            if held_out
+            else "(no validation windows configured)"
+        )
+        md = (
+            f"# MCMC calibration `{tag}`\n\n"
+            f"fit window(s) **{windows_md}** | {n_chains} chains × "
+            f"{n_particles} particles | base seed {base_seed}\n\n"
+            f"**Converged: {converged}** (max Rhat {max_rhat:.4f}, threshold 1.01)\n\n"
+            f"## Posterior (94% HDI)\n\n{summ_df.to_markdown(index=False)}\n\n"
+            f"## Parameters railing against bounds (widen these)\n\n{rail_md}\n\n"
+            f"## Posterior-predictive skill per receptor (in-sample, pooled)\n\n{pred_md}\n\n"
+            f"## Held-out skill (windows never in the likelihood)\n\n{held_md}\n"
+        )
+        s3c.put_object(Bucket=bucket, Key=f"{prefix}/summary.md", Body=md.encode())
+        archived["summary"] = f"{prefix}/summary.md"
+
+        manifest = RunManifest(
+            kind="mcmc",
+            tag=tag,
+            window=list(window),
+            seed=base_seed,
+            git_sha=os.getenv("DAGSTER_GIT_SHA", "unknown"),
+            image_digest=os.getenv("DAGSTER_IMAGE_DIGEST", "unknown"),
+            status="complete",
+            created=_json.dumps(datetime.now(UTC), default=str),
+            headline={
+                "converged": converged,
+                "max_rhat": float(max_rhat),
+                "n_railing": len(railing),
+                "mean_coverage_94": (
+                    float(np.mean([p["coverage_94"] for p in predictive])) if predictive else None
+                ),
+                "held_out_mean_coverage_94": (
+                    float(np.mean([p["coverage_94"] for p in held_out if "coverage_94" in p]))
+                    if any("coverage_94" in p for p in held_out)
+                    else None
+                ),
+            },
+            artifacts=archived,
+        )
+        write_manifest(s3c, bucket, manifest)
+    else:
+        context.log.info("DAGSTER_S3_BUCKET unset; skipping archive to runs/mcmc/%s/", tag)
+
+    slack.watch(
+        f":game_die: MCMC calibration complete (run {context.run_id[:8]})\n"
+        f"Chains: {n_chains} × {n_particles} particles | window {window}\n"
+        f"Converged: {converged} (max Rhat {max_rhat:.3f}) | railing: {len(railing)}",
+    )
 
     return dg.MaterializeResult(
-        value=mcmc_chain_results,
+        value={
+            "idata": combined.to_dict(),
+            "diagnostics": diag,
+            "config": {**cfg, "n_chains": n_chains},
+        },
         metadata={
-            "n_chains": config_dict.get("n_chains"),
-            "n_posterior_draws": config_dict.get("n_draws_posterior"),
+            "tag": tag,
+            "n_chains": n_chains,
+            "n_particles": n_particles,
             "converged": converged,
             "max_rhat": float(max_rhat),
-            "diagnostics_summary": dg.MetadataValue.md(
-                f"**Convergence**: {'PASS' if converged else 'FAIL'}\n\n"
-                f"**Max Rhat**: {max_rhat:.4f} (threshold: 1.01)\n\n"
-                f"**Parameters**: {len([d for d in diag if d != '_summary'])}"
+            "window": str(window),
+            "railing_params": ", ".join(r["parameter"] for r in railing) or "(none)",
+            "posterior_summary": dg.MetadataValue.md(summ_df.to_markdown(index=False)),
+            "predictive_skill": dg.MetadataValue.md(
+                pd.DataFrame(predictive).to_markdown(index=False)
+                if predictive
+                else "(not computed)"
+            ),
+            "held_out_skill": dg.MetadataValue.md(
+                pd.DataFrame(held_out).to_markdown(index=False)
+                if held_out
+                else "(no validation windows)"
+            ),
+            "archived": dg.MetadataValue.md(
+                "\n".join(f"- `{k}`: `{v}`" for k, v in archived.items()) or "(no S3 archive)"
             ),
         },
     )
@@ -648,80 +1192,224 @@ def mcmc_aggregate(
 @dg.asset(
     partitions_def=cv_fold_partitions,
     group_name="loo_cv",
-    op_tags=_WORKER_K8S_TAGS,
+    op_tags=_MCMC_K8S_TAGS,
+    pool="nrp_heavy",  # non-exempt (2 CPU/8Gi) — bound by the NRP 4-pod limit
+    retry_policy=_PREEMPT_RETRY,
     io_manager_key="s3_io",
     required_resource_keys={"s3"},
-    ins={"mcmc_chain_results": dg.AssetIn("mcmc_chain_results")},
 )
 def cv_fold_results(
     context: AssetExecutionContext,
-    mcmc_chain_results: dict[str, Any],
+    config: McmcConfig,
 ) -> dict[str, Any]:
-    """Evaluate posterior predictive on a held-out window.
+    """Leave-one-event-out CV for this partition's event.
 
-    Each partition corresponds to one event/window to hold out.
-    Uses the posterior samples from mcmc_chain_results to compute
-    predictions on the held-out data.
-
-    TODO: This is scaffolding. Real implementation should:
-      - Fit MCMC on all windows EXCEPT this one
-      - Evaluate posterior predictive on the held-out window
-      - Return RMSE per metric + overall mean RMSE
+    Refits the emission parameters on the event's window with the event's
+    hours *excluded*, then predicts those held-out hours — the honest
+    out-of-sample test. Returns train (in-sample) and test (held-out)
+    posterior-predictive skill per receptor; ``cv_aggregate`` combines
+    them into the generalization report. Each fold is its own SMC fit
+    (one chain, isolated pod), reusing the exact calibration machinery.
     """
+    event = context.partition_key
+    ev = CV_EVENTS[event]
+    (ws, we), (hs, he) = ev["window"], ev["holdout"]
+    context.log.info("CV fold %s: window %s→%s, hold out %s→%s", event, ws, we, hs, he)
 
-    held_out_event = context.partition_key
-    context.log.info(f"Hold-out CV fold: {held_out_event}")
+    try:
+        df = sobol.load_window(sobol.DEFAULT_PARQUET, (ws, we))
+    except Exception as exc:  # missing window data → skip, don't fail the whole sweep
+        context.log.warning("fold %s skipped: %s", event, exc)
+        return {"event": event, "status": f"skipped: {exc}"}
 
-    # TODO: Load observations for held-out event
-    obs_holdout = {k: np.random.randn(100) for k in _CALIBRATION_METRICS}  # random ok: placeholder
+    drivers, met, hours = sobol.make_drivers_and_met(df)
+    obs_mat = sobol.build_obs(df, hours, sobol.RECEPTOR_NAMES)  # (n_hours, n_receptors)
+    holdout = (hours >= pd.Timestamp(hs)) & (hours < pd.Timestamp(he))
+    if holdout.sum() == 0 or (~holdout).sum() == 0:
+        return {"event": event, "status": "skipped: empty holdout/train split"}
 
-    # TODO: Wire forward_model_fn to actual dispersion model
-    def forward_model_fn(params):
-        return {k: np.random.randn(100) for k in obs_holdout}  # random ok: placeholder
+    param_names = list(sobol.PARAM_RANGES)
 
-    # TODO: Restore InferenceData from mcmc_chain_results
-    # idata = az.from_dict(mcmc_chain_results.get("idata", {}))
-    # Compute posterior predictive on held-out window
-    cv_metrics = mcmc.posterior_predictive_cv(
-        None,  # idata placeholder — requires wiring
-        forward_model_fn,
-        obs_holdout,
+    # Same treatment gating as mcmc_chain_results, so CV can validate the
+    # treatment model — not just the baseline.
+    priors = mcmc.build_priors(
+        sobol_indices=None,
+        include_mixing_height=config.mixing_height,
+        include_drainage_box=config.drainage_box,
+        include_flow_turbulence=config.flow_turbulence,
     )
+    extra = [p for p in priors if p not in sobol.PARAM_RANGES]
+    draw_names = [*param_names, *extra]
+    n_fwd = len(param_names)
+
+    def fwd(vec: np.ndarray) -> np.ndarray:
+        x = dict(zip(extra, vec[n_fwd:], strict=True))
+        kw = _treatment_forward_kwargs(
+            x,
+            mixing_height=config.mixing_height,
+            drainage_box=config.drainage_box,
+            flow_turbulence=config.flow_turbulence,
+            mixing_height_day_m=config.mixing_height_day_m,
+            drainage_bearing_deg=config.drainage_bearing_deg,
+            ebb_source=config.ebb_source,
+        )
+        return sobol.predict_concentrations(vec[:n_fwd], param_names, drivers, met, **kw)
+
+    # --- fit on TRAIN (holdout hours masked out of the likelihood) ---
+    train_obs = obs_mat.copy()
+    train_obs[holdout, :] = np.nan
+    valid_train = ~np.isnan(train_obs)
+    if valid_train.sum() == 0:
+        return {"event": event, "status": "skipped: no training observations"}
+
+    def forward_train(params: dict[str, float]) -> np.ndarray:
+        vec = np.array([params[p] for p in draw_names], dtype=float)
+        return fwd(vec)[valid_train]
+
+    model = mcmc.build_model(
+        train_obs[valid_train], forward_train, priors, obs_sigma=config.obs_sigma
+    )
+    idata = mcmc.sample_posterior(model, n_chains=1, n_draws=config.n_draws, seed=config.seed)
+
+    # --- predict: held-out (test) vs in-sample (train) ---
+    draws = mcmc.posterior_param_draws(idata, draw_names, n_samples=100)
+    test_obs = np.where(holdout[:, None], obs_mat, np.nan)
+    train_only = np.where(holdout[:, None], np.nan, obs_mat)
+    test_skill = mcmc.predictive_skill(draws, fwd, test_obs, sobol.RECEPTOR_NAMES)
+    train_skill = mcmc.predictive_skill(draws, fwd, train_only, sobol.RECEPTOR_NAMES)
+    context.log.info("CV fold %s complete: %d receptors scored held-out", event, len(test_skill))
 
     return {
-        "held_out_event": held_out_event,
-        "cv_metrics": cv_metrics,
+        "event": event,
+        "status": "complete",
+        "window": [ws, we],
+        "holdout": [hs, he],
+        "n_particles": config.n_draws,
+        "seed": config.seed,
+        "mixing_height": config.mixing_height,
+        "drainage_box": config.drainage_box,
+        "flow_turbulence": config.flow_turbulence,
+        "train_skill": train_skill,
+        "test_skill": test_skill,
     }
 
 
 @dg.asset(
-    deps=[cv_fold_results],
     group_name="loo_cv",
     op_tags=_AGGREGATOR_K8S_TAGS,
+    pool="nrp_heavy",  # non-exempt (2 CPU/8Gi) — bound by the NRP 4-pod limit
+    retry_policy=_PREEMPT_RETRY,
     io_manager_key="s3_io",
     required_resource_keys={"s3", "slack"},
+    ins={
+        "folds": dg.AssetIn(
+            "cv_fold_results",
+            partition_mapping=dg.AllPartitionMapping(),
+        ),
+    },
 )
 def cv_aggregate(
-    context: AssetExecutionContext, cv_fold_results: dict[str, Any]
+    context: AssetExecutionContext,
+    folds: dict[str, dict[str, Any]],
 ) -> dg.MaterializeResult:
-    """Aggregate cross-validation results across all hold-out folds.
+    """Combine LOO-CV folds → out-of-sample skill + generalization report.
 
-    Computes mean RMSE and coverage metrics across folds.
+    Reports the honest test (held-out) predictive skill averaged over
+    folds, alongside the train (in-sample) skill so the generalization
+    gap is explicit. Writes a durable runs/cv/<tag>/ report + manifest.
     """
-    context.log.info("CV aggregate: collecting hold-out fold results...")
+    slack: SlackWebhookResource = context.resources.slack
 
-    # TODO: Aggregate cv_fold_results from all partitions
-    # For now, placeholder
-    all_cv_metrics = {}
-    mean_rmse = 0.0
+    def _mean(skill_lists: list[list[dict[str, Any]]], key: str) -> float | None:
+        vals = [s[key] for lst in skill_lists for s in lst]
+        return float(np.mean(vals)) if vals else None
+
+    complete = {k: v for k, v in folds.items() if v.get("status") == "complete"}
+    skipped = {k: v.get("status") for k, v in folds.items() if v.get("status") != "complete"}
+    rows: list[dict[str, Any]] = []
+    for event, v in sorted(complete.items()):
+        for s in v["test_skill"]:
+            rows.append({"event": event, "split": "test", **s})
+        for s in v["train_skill"]:
+            rows.append({"event": event, "split": "train", **s})
+    folds_df = pd.DataFrame(rows)
+
+    test_lists = [v["test_skill"] for v in complete.values()]
+    train_lists = [v["train_skill"] for v in complete.values()]
+    test_rmse, test_corr = _mean(test_lists, "rmse"), _mean(test_lists, "corr")
+    train_rmse, train_corr = _mean(train_lists, "rmse"), _mean(train_lists, "corr")
+    test_cover = _mean(test_lists, "coverage_94")
+    gen_gap = (
+        (train_corr - test_corr) if (train_corr is not None and test_corr is not None) else None
+    )
+    context.log.info(
+        "CV aggregate: %d complete, %d skipped | test RMSE=%s corr=%s | gen-gap=%s",
+        len(complete),
+        len(skipped),
+        test_rmse,
+        test_corr,
+        gen_gap,
+    )
+
+    run_date = datetime.now(UTC).strftime("%Y-%m-%d")
+    tag = f"loo_cv_{len(complete)}folds_{run_date}"
+    bucket = os.getenv("DAGSTER_S3_BUCKET")
+    archived: dict[str, str] = {}
+    if bucket and not folds_df.empty:
+        s3c = context.resources.s3  # dagster-aws sets context.resources.s3 to the boto3 client
+        prefix = _archive_prefix("cv", tag)
+        s3c.put_object(
+            Bucket=bucket, Key=f"{prefix}/cv_folds.csv", Body=folds_df.to_csv(index=False).encode()
+        )
+        archived["cv_folds"] = f"{prefix}/cv_folds.csv"
+        md = (
+            f"# Leave-one-event-out CV `{tag}`\n\n"
+            f"folds complete: **{len(complete)}** | skipped: {len(skipped)}\n\n"
+            f"## Out-of-sample (held-out) skill\n\n"
+            f"- mean RMSE: **{test_rmse:.3f}** ppb\n"
+            f"- mean corr: **{test_corr:.3f}**\n"
+            f"- mean 94% coverage: **{test_cover:.3f}**\n\n"
+            f"## Generalization gap (train − test corr): "
+            f"**{gen_gap:.3f}**\n\n"
+            f"train mean RMSE {train_rmse:.3f} / corr {train_corr:.3f}\n\n"
+            f"## Per-fold, per-receptor\n\n{folds_df.to_markdown(index=False)}\n\n"
+            f"## Skipped folds\n\n"
+            + ("\n".join(f"- `{k}`: {s}" for k, s in skipped.items()) or "(none)")
+        )
+        s3c.put_object(Bucket=bucket, Key=f"{prefix}/summary.md", Body=md.encode())
+        archived["summary"] = f"{prefix}/summary.md"
+        manifest = RunManifest(
+            kind="cv",
+            tag=tag,
+            window=["", ""],
+            git_sha=os.getenv("DAGSTER_GIT_SHA", "unknown"),
+            image_digest=os.getenv("DAGSTER_IMAGE_DIGEST", "unknown"),
+            status="complete",
+            created=_json.dumps(datetime.now(UTC), default=str),
+            skill={"validation": train_corr, "test": test_corr},
+            headline={"n_folds": len(complete), "test_rmse": test_rmse, "gen_gap": gen_gap},
+            artifacts=archived,
+        )
+        write_manifest(s3c, bucket, manifest)
+
+    if test_corr is not None:
+        slack.watch(
+            f":test_tube: LOO-CV complete ({len(complete)} folds)\n"
+            f"Out-of-sample corr {test_corr:.3f}, RMSE {test_rmse:.3f} ppb | "
+            f"gen-gap {gen_gap:.3f}",
+        )
 
     return dg.MaterializeResult(
-        value={"cv_metrics_aggregate": all_cv_metrics},
+        value={"folds": rows, "skipped": skipped},
         metadata={
-            "n_folds": 0,  # TODO
-            "mean_rmse": float(mean_rmse),
+            "n_folds_complete": len(complete),
+            "n_folds_skipped": len(skipped),
+            "test_rmse": test_rmse if test_rmse is not None else float("nan"),
+            "test_corr": test_corr if test_corr is not None else float("nan"),
+            "test_coverage_94": test_cover if test_cover is not None else float("nan"),
+            "generalization_gap": gen_gap if gen_gap is not None else float("nan"),
             "cv_summary": dg.MetadataValue.md(
-                f"**Cross-validation RMSE**: {mean_rmse:.2f} ppb\n\n**Folds evaluated**: 0"  # TODO
+                folds_df.to_markdown(index=False) if not folds_df.empty else "(no complete folds)"
             ),
         },
     )
@@ -744,6 +1432,17 @@ sobol_aggregate_job = dg.define_asset_job(
     selection=dg.AssetSelection.assets("sobol_aggregate", "sobol_post_analysis"),
 )
 
+# Evaluates the AutomationConditions on the Sobol aggregate chain so it is
+# self-driving: when the 100-partition chunk backfill finishes, sobol_aggregate
+# then sobol_post_analysis materialise automatically (no manual dg launch).
+# RUNNING by default so it activates on deploy; the daemon runs the evaluation
+# tick (same daemon that runs the run queue and backfills).
+sobol_automation_sensor = dg.AutomationConditionSensorDefinition(
+    name="sobol_automation_sensor",
+    target=dg.AssetSelection.assets("sobol_aggregate", "sobol_post_analysis"),
+    default_status=dg.DefaultSensorStatus.RUNNING,
+)
+
 
 # NOTE: the Saturn→Nestor HYSPLIT workload lives in its OWN code location
 # (nrp.saturn_definitions, deployed as `nrp-hysplit` with the -hysplit
@@ -763,6 +1462,7 @@ defs = dg.Definitions(
     sensors=[
         nrp_run_failure_to_slack,
         nrp_run_start_to_slack,
+        sobol_automation_sensor,
     ],
     resources=make_resources(),
     executor=make_executor(max_concurrent=100),

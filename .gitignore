@@ -58,5 +58,9 @@ Thumbs.db
 # Dagster local runtime state (NRP local dev) — never committed
 dagster_home/
 
+# Reference papers kept locally (copyright — never commit; titles are
+# logged in docs/calibration_status.md instead)
+*.pdf
+
 # HYSPLIT ARL meteorology cache (nrp/metfetch.py local default) — huge, refetchable
 met/

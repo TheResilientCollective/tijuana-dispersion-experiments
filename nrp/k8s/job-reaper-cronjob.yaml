@@ -54,7 +54,7 @@ spec:
               # Any image with kubectl + /bin/sh works. Pinned to the cluster
               # minor (v1.33). Swap for rancher/kubectl:v1.33.1 if this tag is
               # unavailable in your registry mirror.
-              image: bitnami/kubectl:1.33
+              image: bitnamilegacy/kubectl:1.33
               resources:
                 requests:
                   cpu: 50m

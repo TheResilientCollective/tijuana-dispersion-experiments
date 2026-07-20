@@ -99,18 +99,23 @@ def _locations() -> list[SourceSpecLocation]:
 
 
 # 11 parameters, physically-motivated bounds (identical to the prototype).
+# Ranges widened 2026-07-08 after the first 8-chain MCMC posterior railed
+# several parameters against their bounds (Q10→lower, substrate_alpha /
+# diel_amplitude / f_arch_bay / f_arch_channel→upper). The data wanted room
+# outside the original box; these bounds give it. Shared by Sobol and MCMC
+# (MCMC priors derive from these), so the parameter space stays consistent.
 PARAM_RANGES: dict[str, tuple[float, float]] = {
     "baseline_scale": (1.0, 200.0),
-    "Q10": (1.5, 3.5),
+    "Q10": (1.0, 3.5),  # widened low: posterior floored at 1.5
     "T_ref_c": (10.0, 30.0),
-    "substrate_alpha": (0.0, 0.5),
+    "substrate_alpha": (0.0, 1.0),  # widened high: posterior at 0.49/0.5
     "substrate_threshold": (10.0, 40.0),
-    "diel_amplitude": (1.0, 5.0),
+    "diel_amplitude": (1.0, 10.0),  # widened high: posterior at 4.93/5.0
     "diel_phase_hours": (0.0, 12.0),
     "f_arch_drain": (0.5, 5.0),
-    "f_arch_channel": (0.1, 2.0),
+    "f_arch_channel": (0.1, 4.0),  # widened high: posterior HDI to 1.94/2.0
     "f_arch_estuary": (0.1, 3.0),
-    "f_arch_bay": (0.0, 0.5),
+    "f_arch_bay": (0.0, 2.0),  # widened high: posterior HDI to 0.5/0.5
 }
 
 # Scalar fit metrics fed to Sobol analysis: 3 receptors × 3 metrics = 9.
@@ -200,6 +205,7 @@ def load_window(parquet_path: Path, window: tuple[str, str]) -> pd.DataFrame:
         "sbiwtp_flow_mgd",
         "sbiwtp_deficit",
         "tide_height",
+        "Flow (m^3/s)--Border",
     ]
     return df[cols].groupby(["hour", "site_name"], as_index=False).mean(numeric_only=True)
 
@@ -232,6 +238,9 @@ def make_drivers_and_met(
                 else 0.0,
                 tide_height_m=float(row["tide_height"]) if pd.notna(row["tide_height"]) else 0.0,
                 is_night=is_night,
+                border_flow_m3s=float(row["Flow (m^3/s)--Border"])
+                if pd.notna(row["Flow (m^3/s)--Border"])
+                else None,
             ),
         )
         met.append(
@@ -247,7 +256,45 @@ def make_drivers_and_met(
             ),
         )
         hours.append(row["hour"])
+
+    # Tide tendency d(tide)/dt (m/h) for the tide-ebb culvert term
+    # (calibration_status.md 2026-07-11): a single row can't know its
+    # neighbours, so compute the gradient across the assembled series.
+    # Hour gaps are rare in this record; np.gradient over the index is a
+    # per-hour rate to first order. Default 0.0 keeps f_tide_ebb inert.
+    if len(drivers) >= 2:
+        tide = np.array([d.tide_height_m for d in drivers])
+        t_h = np.array([h.timestamp() for h in hours]) / 3600.0
+        rate = np.gradient(tide, t_h)
+        for d, r in zip(drivers, rate, strict=True):
+            d.tide_rate_m_h = float(r)
     return drivers, met, pd.DatetimeIndex(hours)
+
+
+def load_windows_concat(
+    windows: list[tuple[str, str]],
+    parquet_path: Path = DEFAULT_PARQUET,
+) -> tuple[list[EmissionDrivers], list[MetSpec], np.ndarray]:
+    """Load several fit windows and concatenate their hourly series.
+
+    Each window is loaded independently — per-window quantities (the
+    tide-rate gradient in :func:`make_drivers_and_met`) never bleed across
+    the gap between windows — then the driver/met lists and obs matrices
+    are concatenated along time. The forward pass is per-hour, so a pooled
+    likelihood over the concatenation is exact. A single window reproduces
+    the ``load_window`` → ``make_drivers_and_met`` → ``build_obs`` path
+    byte-identically.
+    """
+    all_drivers: list[EmissionDrivers] = []
+    all_met: list[MetSpec] = []
+    all_obs: list[np.ndarray] = []
+    for ws, we in windows:
+        df = load_window(parquet_path, (ws, we))
+        drivers, met, hours = make_drivers_and_met(df)
+        all_drivers.extend(drivers)
+        all_met.extend(met)
+        all_obs.append(build_obs(df, hours, RECEPTOR_NAMES))
+    return all_drivers, all_met, np.vstack(all_obs)
 
 
 def build_obs(df_window: pd.DataFrame, hours: pd.DatetimeIndex, names: list[str]) -> np.ndarray:
@@ -261,25 +308,52 @@ def build_obs(df_window: pd.DataFrame, hours: pd.DatetimeIndex, names: list[str]
     return obs
 
 
-def evaluate_sample(
+def predict_concentrations(
     sample_row: np.ndarray,
     param_names: list[str],
     drivers: list[EmissionDrivers],
     met: list[MetSpec],
-    obs: np.ndarray,
-) -> dict[str, float]:
-    """Evaluate one parameter vector → the 9 scalar fit metrics.
+    *,
+    mixing_height_night_m: float | None = None,
+    mixing_height_day_m: float = 1500.0,
+    a_ebb: float = 0.0,
+    ebb_source_names: tuple[str, ...] = ("Saturn Blvd Bridge",),
+    a_flow: float = 0.0,
+    flow_threshold_m3s: float = 0.44,
+    drainage_lambda_along_m: float | None = None,
+    drainage_lambda_cross_m: float = 500.0,
+    drainage_bearing_deg: float = 280.0,
+    box_tau_h: float = 3.0,
+) -> np.ndarray:
+    """Run the ``tijuana_dispersion`` forward model for one parameter vector.
 
-    Mirrors the prototype's ``evaluate_one``; uses the published
-    ``tijuana_dispersion`` forward model through the service request
-    object so the science is identical to the calibration line. The
-    service import is lazy (deferred ``service`` extra).
+    Returns the ``(n_hours, n_receptors)`` predicted H2S concentration
+    matrix (ppb), receptor order = :data:`RECEPTOR_NAMES`. This is the
+    shared forward pass used by both the Sobol metrics
+    (:func:`evaluate_sample`) and the MCMC likelihood, so the science is
+    identical across workloads. The service import is lazy (deferred
+    ``service`` extra).
+
+    Mixing-height experiment (mixing_height_experiment.md): when
+    ``mixing_height_night_m`` is set, each hour's MetSpec gets a lid at that
+    height on nights (``is_night``) and ``mixing_height_day_m`` on days, so
+    the plume reflects off a nocturnal boundary layer. ``None`` (default)
+    keeps the original unbounded plume — the baseline path is untouched.
+
+    Drainage-box treatment (calibration_status.md 2026-07-11, Saturn Blvd
+    culvert mechanism): ``a_ebb`` enables the tide-ebb enhancement on
+    ``ebb_source_names`` (needs ``tide_rate_m_h`` on the drivers — set by
+    :func:`make_drivers_and_met`); ``drainage_lambda_along_m`` switches the
+    calm-night stagnation box to the receptor-dependent drainage kernel
+    (bearing ≈ 280°, the down-valley flow direction). Defaults (0.0/None)
+    leave both off — baseline path byte-identical.
     """
     from tijuana_dispersion import (
         EmissionParameters,
         EmissionsModel,
         ForwardRunRequest,
         SourceSpec,
+        StagnationBoxSpec,
         run_forward,
     )
 
@@ -301,8 +375,36 @@ def evaluate_sample(
             "spill": 1.0,
         },
         baselines_g_s={loc.name: s["baseline_scale"] for loc in locations},
+        a_ebb=a_ebb,
+        ebb_source_names=ebb_source_names if (a_ebb > 0.0 or a_flow > 0.0) else (),
+        a_flow=a_flow,
+        flow_threshold_m3s=flow_threshold_m3s,
     )
     em = EmissionsModel(params)
+
+    # Optional receptor-dependent drainage box for the stagnation hours.
+    stagnation_box = (
+        StagnationBoxSpec(
+            lambda_m=drainage_lambda_along_m,
+            drainage_bearing_deg=drainage_bearing_deg,
+            lambda_cross_m=drainage_lambda_cross_m,
+            tau_h=box_tau_h,
+        )
+        if drainage_lambda_along_m is not None
+        else None
+    )
+
+    # Optional mixing-height lid: build per-hour MetSpec copies with the
+    # nocturnal/daytime lid set. None => use met unchanged (baseline).
+    if mixing_height_night_m is not None:
+        met = [
+            m.model_copy(
+                update={
+                    "mixing_height_m": mixing_height_night_m if m.is_night else mixing_height_day_m,
+                },
+            )
+            for m in met
+        ]
 
     n_t = len(drivers)
     pred = np.zeros((n_t, len(receptors)))
@@ -324,9 +426,27 @@ def evaluate_sample(
                 receptors=receptors,
                 meteorology=[met[t_idx]],
                 units="ppb",
+                stagnation_box=stagnation_box,
             ),
         )
         pred[t_idx] = np.asarray(res.concentrations)[0]
+    return pred
+
+
+def evaluate_sample(
+    sample_row: np.ndarray,
+    param_names: list[str],
+    drivers: list[EmissionDrivers],
+    met: list[MetSpec],
+    obs: np.ndarray,
+) -> dict[str, float]:
+    """Evaluate one parameter vector → the 9 scalar fit metrics.
+
+    Mirrors the prototype's ``evaluate_one``; uses the published
+    ``tijuana_dispersion`` forward model (via :func:`predict_concentrations`)
+    so the science is identical to the calibration line.
+    """
+    pred = predict_concentrations(sample_row, param_names, drivers, met)
 
     out: dict[str, float] = {}
     for r_idx, name in enumerate(RECEPTOR_NAMES):

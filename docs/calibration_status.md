@@ -32,6 +32,488 @@ search — it is in fact our primary, best-fit receptor.)
 
 ---
 
+## 2026-07-11 — drainage_box MCMC (single-window): best NESTOR fit yet; ebb term railed — widen and go multi-window
+
+**Question**: Does the drainage-kernel + tide-ebb treatment (15 params,
+obs_sigma fixed at 10) improve the fit on Mar 13–16?
+Archive: `runs/mcmc/2026-03-13_2026-03-16_8chains_500p_seed42_drainbox_2026-07-11/`.
+
+**Result vs the 11-param baseline** (same window/seed/particles):
+| metric | baseline | drainage_box |
+|---|---|---|
+| NESTOR RMSE | 83.7 | **74.8** |
+| NESTOR corr | 0.50 | **0.58** |
+| NESTOR pred mean (obs 41.1) | 12.2 (3.4× under) | **17.1 (2.4× under)** |
+| IB pred mean (obs 8.0) | 12.6 | **6.6** (coverage 0.07→0.18) |
+| SAN YSIDRO | over 2.8×, corr 0.08 | over 2.3×, corr −0.02 (worse corr) |
+| max Rhat | 1.09 | 1.21 (not converged) |
+
+Treatment posteriors — the informative part:
+- **`a_ebb` RAILS at its upper bound** (295 ± 3 on U(0, 300)): the data
+  wants an even stronger ebb term. Bound did the fitting → widen.
+- **`λ_along` = 2010 ± 180 m — cleanly identified, interior** (Rhat
+  1.00). The drainage kernel's along-valley scale is real and ~2 km.
+- `λ_cross` = 2536 (pushing its 3000 bound) and `τ` = 11.0 h (pushing
+  12): the sampler wants a wider, longer-lived box — widening λ_cross
+  also erodes directionality, which is likely what dragged SAN YSIDRO's
+  corr down (a big cross scale boosts SY along with NESTOR).
+- `f_arch_channel` 0.53 → **2.37**: channel sources upweighted, as the
+  Saturn mechanism predicts.
+- diel params railed hard (amplitude→10 ceiling, phase→0): the diel
+  machinery is straining to make emissions nocturnal — some of that is
+  the box's job now; watch for redistribution once priors widen.
+
+**State change**: First treatment that materially improves NESTOR while
+keeping σ honest (fixed 10). The mechanism params are being *used*
+(a_ebb slammed the ceiling, λ_along identified) rather than ignored
+(contrast: mixing-height lid returned its prior). Poor Rhat (1.21) and
+three near/at-bound treatment params say this posterior is provisional.
+
+**Next**: (1) widen priors — `a_ebb` U(0, 1000), `λ_cross` U(100, 6000),
+`τ` U(0.5, 24); (2) fold into the **multi-window campaign** (machinery
+already wired, windows locked below) rather than another single-window
+rerun — pooled windows constrain the SY/NESTOR trade-off far better than
+this one window can; (3) coverage stays meaningless until bias closes —
+revisit per-receptor σ (with informative priors) only after that.
+
+## 2026-07-11 — multi-window campaign design (windows locked; machinery wired)
+
+**Plan** (approved): calibrate the drainage-box model **jointly across
+windows with regime contrast**, validate on windows the fit never saw.
+Rationale: `a_flow` is degenerate in any constant-flow window, and the
+tide-ebb signal aliases the 12 h night cycle in a single 3-day window.
+
+**Machinery** (this commit): `McmcConfig.extra_windows` pools additional
+windows into ONE likelihood (`sobol.load_windows_concat` — per-window
+tide gradients, exact concatenation; single window reproduces the old
+path byte-identically). `McmcConfig.validation_windows` makes the
+aggregate score posterior-predictive skill on held-out windows (new
+"Held-out skill" table in summary.md + `held_out_predictive` in
+diagnostics.json; tag gains `_Nwin`). `cv_fold_results` now honors the
+treatment flags (it was baseline-only). Shared
+`_treatment_forward_kwargs` helper replaces three copies of the
+treatment→forward mapping. Window scanner:
+`nrp/scripts/select_windows.py`.
+
+**Windows locked** (from the scan; SAN YSIDRO has coverage gaps through
+much of 2025 — chosen windows avoid the holes):
+
+Calibration (pooled fit):
+1. **2026-03-13→16** — anchor: strongest calm-night signal (149.7 ppb),
+   full coverage; flow static (tide/drainage identified here).
+2. **2025-05-18→21** — calm-night 120 ppb, full 3-receptor coverage,
+   flow 0.99–1.50 m³/s.
+3. **2025-05-10→13** — calm-night 113 ppb, flow 0.03–0.96 m³/s —
+   **spans the 0.44 m³/s threshold**, the key `a_flow` identifier.
+4. **2025-11-12→15** — storm window, flow 0.10–140 m³/s, moderate
+   signal (calm-night 16–23 ppb): pins the high-flow end and penalizes
+   an over-eager flow term (observed H₂S is NOT huge at 140 m³/s).
+
+Validation (never in the likelihood):
+- **2026-04-19→22** — strong event (calm-night 139 ppb), the honest
+  skill test.
+- **2025-10-15→18** — storm, LOW signal (3.4 ppb calm-night): tests
+  that the model doesn't hallucinate flow-driven emission.
+- **2026-02-08→11** — existing CV event window.
+
+NRP ask (user action): raise non-exempt concurrent-pod cap 4 → **16**
+for `ucsd-center4health` (draft message in the approved plan file).
+GPU: not useful for SMC with a Python black-box forward — scale-out on
+CPU pods is the lever.
+
+**Next**: after the single-window drainage-box result + NRP grant:
+image rebuild/pin → per-window fits (stability) → pooled 4-window fit
+with `validation_windows` set → event CV with treatment flags.
+
+## 2026-07-11 — reference: Pankow et al. 2006 (stream VOC source apportionment / transfer physics)
+
+**Source**: Pankow, J.F., Asher, W.E., Zogorski, J.S. "Source
+Apportionment Modeling of Volatile Organic Compounds in Streams."
+*Environ. Toxicol. Chem.* 2006, 25(4), 921–932. (Methods paper; PDF
+held locally only — NOT in git.)
+
+Why it's on file (framework, not evidence):
+- **Standard water→air transfer parameterization**: volatilization flux
+  `J_vol = k_OL·c_w` with the gas/liquid transfer velocity `k_OL`
+  depending on stream flow/turbulence, wind, temperature, and the
+  compound (Henry's-law partitioning `c_g/c*_w = H/RT`). This is the
+  physical quantity our ad-hoc hotspot factors (`f_tide_ebb`,
+  `f_flow_turbulence`) are standing in for — if the culvert terms ever
+  need formalizing, replace them with a `k_OL(turbulence)` model at the
+  drop rather than stacking more multipliers.
+- **Characteristic time/distance framework** (τ_s = c_w·h/(c*_w·k_OL),
+  λ_km = ū·τ): predicts how far downstream air–water exchange
+  re-shapes composition — the right tool for interpreting the
+  Frobenius et al. dissolved-H₂S depletion gradient (river → estuary →
+  ocean) as a stripping length, and for placing effective emission
+  segments along the channel instead of point sources.
+- **SA_F vs SA_J source-apportionment conventions** for volatilizable
+  compounds — relevant if we later apportion dissolved H₂S among
+  in-stream sources (their STREAMVOC model is prior art).
+
+## 2026-07-11 — published evidence: Frobenius et al. 2026 confirms the Saturn Blvd mechanism
+
+**Source**: Frobenius, C.R., Herbst, J.K., Hamlin, J.D., Rico, B.,
+Pomeroy, R.S., Prather, K.A. "River and Coastal Water VOC Emissions
+Drive Spatial and Diurnal Air Quality Variability." *ACS EST Air* 2026,
+3, 1758–1771. doi:10.1021/acsestair.5c00514. (25-day TD-GCMS air + P&T
+water campaign, Sep 2024, four sites incl. Nestor and the river at
+Saturn Blvd + Hollister St. PDF held locally only — NOT in git.)
+
+Findings that bear directly on our model structure:
+- **Saturn Blvd hotspot physics confirmed**: "the placement of four
+  man-made drainage conduits produced a steep drop off, similar to a
+  waterfall, that enhances turbulence and aerates the water" —
+  bubble-mediated stripping is the key emission pathway; persistent
+  foam/bubble patches downstream of the hotspot. This is the culvert
+  drop in our `f_tide_ebb` term (field knowledge, same structure).
+- **River flow is the dominant emission modulator**: peak VOC/H₂S at
+  Nestor coincided with transboundary flow >50 MGD; after the Sep-2024
+  wastewater diversion (<10 MGD) gas-phase VOC/H₂S collapsed **even
+  while dissolved H₂S stayed high** — less turbulence at the drop, less
+  stripping. Sulfur compounds fell 78.3% post-diversion.
+- **Nestor is the downwind receptor**: prevailing winds carry river air
+  to Nestor; max VOC when wind comes from the Saturn Blvd direction or
+  in stagnant (<1 m/s) nights — "stagnant nighttime conditions coupled
+  with high river flow" is exactly our stagnation-regime + drainage
+  geometry.
+- **Nighttime enrichment signature** at Nestor disappeared when the
+  flow was diverted → the diurnal H₂S/VOC signal is source-driven
+  (river), not purely meteorological.
+- Dissolved H₂S drops monotonically river → estuary → ocean (efficient
+  stripping at the drops); ≥31% of Nestor's airborne VOC species are
+  also present in river water.
+
+**Implication for the calibration**: mechanism validated by independent
+measurement. One gap: the paper's dominant modulator is **river flow**,
+not tide. Our Mar 13–16 window has `Flow (m^3/s)--Border` **constant at
+2.10 m³/s ≈ 48 MGD** (a static fill in the parquet) — squarely in the
+paper's "high-flow/drop-active" regime, so a flow term is unidentifiable
+within-window and tide is correctly the only within-window modulator.
+For **multi-window** calibration, add a flow-driven turbulence factor at
+Saturn Blvd (`EmissionDrivers.border_flow_m3s` exists but is not wired
+in `make_drivers_and_met` — wire it then), and prefer windows straddling
+flow changes to identify it.
+
+## 2026-07-11 — drainage_kernel + tide_ebb implemented; forward validation positive
+
+**Implementation** (`tijuana-dispersion` `feat/receptor-box` @ `03bf5d5`,
+69 tests pass):
+- `stagnation.drainage_weighted_e_local(sources, receptor, λ_along,
+  λ_cross, bearing)`: directional kernel — upstream sources decay on
+  λ_along down the drainage axis; abeam/downstream on the short λ_cross.
+  Exposed via `StagnationBoxSpec.drainage_bearing_deg` (valley ≈ 280°)
+  + `lambda_cross_m`.
+- Tide-ebb culvert term (derivative form, per user decision):
+  `EmissionDrivers.tide_rate_m_h` (default 0 = inert; caller computes
+  d(tide)/dt across hours), `EmissionParameters.a_ebb` +
+  `ebb_source_names`, `f_tide_ebb = 1 + a_ebb·max(0, −d(tide)/dt)`.
+  Self-lagging; the box residence time supplies the remaining lag.
+
+**Forward validation** (Mar 13–16, baseline posterior-mean emissions,
+bearing 280°, Saturn Blvd Bridge as the ebb source — NO fitting):
+| λ_cross | a_ebb | N/SY | IB/SY | corr(NESTOR, calm hrs) |
+|---|---|---|---|---|
+| (isotropic kernel, any λ) | 0 | 1.0 | — | −0.03 |
+| 500 | 0 | 2.2 | 0.6 | −0.03 |
+| 500 | 40 | 5.7 | 1.3 | +0.33 |
+| 500 | 100 | **10.9** | **2.3** | **+0.37** |
+| obs | | **14.9** | **2.7** | (tide-lag corr +0.60) |
+
+The two structures together approach the observed calm-night receptor
+pattern AND give the predictions tide-locked temporal skill inside the
+stratum, where every previous model form was flat. Absolute scale is low
+(NESTOR 3.4 vs 149.7 ppb) but that's the uncalibrated τ/area and
+`baseline_scale` (bounds allow 200×) — the *pattern* was the hard part.
+a_ebb ~ 40–100 means peak-ebb Saturn emission 15–40× its baseline, i.e.
+the culvert drop dominates the calm-night budget — consistent with the
+field description (the drop is the aeration event; everything else is
+quiescent ponded water).
+
+**Next**: wire calibration: (1) experiments repo — compute
+`tide_rate_m_h` in `make_drivers_and_met`, pass `stagnation_box` spec +
+`a_ebb`/`ebb_source_names` through `predict_concentrations`, config-
+gated like the mixing-height treatment; new params `a_ebb`, `λ_along`,
+`λ_cross`, `tau_h` (bearing fixed at 280°). (2) Re-pin image to the new
+service commit; MCMC treatment v2 on NRP (obs_sigma fixed at 10 —
+lesson from the mhlid_fitsig run). (3) Multi-window tide-lag
+replication to de-alias the 12.4 h/12 h cycle overlap.
+
+## 2026-07-11 — saturn_culvert_field_knowledge + tide-lag check (mechanism identified)
+
+**Field knowledge** (user, 2026-07-11): the calm-night driver at NESTOR
+is **drainage flow**, fed by the **Saturn Blvd culvert**: the culvert
+ponds the river upstream, and at low tides there is a **drop from the
+culvert** (turbulent aeration → H₂S stripping). So the two candidate
+structures from the λ-sweep entry are *coupled*: Saturn Blvd is a
+tide-modulated hotspot, and nocturnal drainage flow delivers it
+down-valley to NESTOR (Berry).
+
+**Empirical check** (Mar 13–16 window; `tide_height` is already in the
+parquet and in `EmissionDrivers.tide_height_m`): NESTOR calm-night H₂S
+vs tide —
+- lag 0: corr ≈ −0.10 (calm night), −0.35 (all night)
+- **lag 2–3 h: corr +0.60 (calm night)**, +0.40..0.49 (all night)
+- i.e. concentrations peak a few hours *after* high tide, **on the
+  ebb** — consistent with the culvert mechanics (high tide submerges
+  the drop and backs up ponding; the falling tide re-exposes the drop
+  and drains the ponded volume over it) plus down-valley transport lag.
+- Low-vs-high tide split, calm nights: 167 vs 128 ppb (NESTOR).
+- *Caveat*: n=15 calm-night hours in one 3-day window; the ~12.4 h tide
+  vs 12 h night cycle aliases — treat as supporting, not proof. A
+  multi-window replication is cheap once the model form exists.
+
+**Proposed model form** (next implementation, both calibratable through
+the existing pipeline):
+1. **Tide-ebb hotspot** (emissions side; `EmissionDrivers.tide_height_m`
+   already wired): per-source multiplier for `Saturn Blvd Bridge` —
+   `f_culvert(t) = 1 + a_ebb · max(0, −d(tide)/dt)` (or a lagged-tide
+   sigmoid), `a_ebb` calibratable. Zero new data plumbing.
+2. **Drainage kernel** (box side; chassis from `feat/receptor-box`):
+   replace the isotropic `exp(−d/λ)` with an along-valley directional
+   weight on stagnation hours — receptors accumulate *upstream* channel
+   sources with decay length `λ_valley` down the drainage axis. NESTOR
+   (down-valley) then integrates the Saturn/Hollister/Dairy Mart chain;
+   SAN YSIDRO (up-valley) does not — which is what the 14.9× ratio needs.
+
+## 2026-07-11 — receptor_box_lambda_sweep (kernel built; inventory geometry can't split NESTOR from SY)
+
+**Question**: Does a receptor-dependent stagnation box — per-receptor
+`E_r = Σ_s rate_s · exp(−d_rs/λ)` — reproduce the calm-night receptor
+pattern (obs NESTOR 149.7 / IB 27.3 / SY 10.1, i.e. N/SY ≈ 15×)?
+
+**Implementation (done)**: `tijuana-dispersion` branch
+`feat/receptor-box` @ `9a53940` (v0.4.0, schema 0.5.0):
+`stagnation.distance_weighted_e_local`, `StagnationBoxBackend(lambda_m=…)`,
+`ForwardRunRequest.stagnation_box` (λ, tau_h, area_m2 — all calibratable),
+composes with the temperature driver; `λ=None` is v1 byte-identical;
+62 tests pass; per-test cache isolation added. (mypy hook pre-broken at
+base 73161d9 — numpy stubs drift, skipped.)
+
+**Result of the λ sweep** (λ ∈ {250…4000} m, baseline posterior-mean
+emissions, 16 calm-night hours): the kernel moves IB down (IB/SY
+0.16–0.75 vs obs 2.7) but **NESTOR/SY stays ≈ 1.0 at every λ** (obs: 14.9).
+Why: SAN YSIDRO is *also* channel-adjacent — CDLP E (1.22 km), CDLP W
+(1.35 km), Dairy Mart Bridge (1.66 km) vs NESTOR's Saturn Blvd Bridge
+(0.89 km). Archetype-summed kernel weights are near-identical for the
+two receptors at every λ (e.g. λ=1000 m: channel 0.82 vs 0.84, total
+1.25 vs 1.26). **No distance decay over the current inventory — even
+with free per-archetype weights — can produce NESTOR ≫ SY.**
+
+**State change**: The calm-night NESTOR anomaly is not explainable by
+horizontal proximity to the *inventoried* sources with *shared archetype
+rates*. Two candidate structures remain:
+1. **Per-source hotspot**: the river at the Saturn Blvd crossing is a
+   locally much stronger emitter than the CDLP/Dairy Mart channel
+   segments (ponding/low-flow turbulence). Then a per-source rate
+   multiplier for Saturn Blvd Bridge — not a smooth archetype weight —
+   is the missing parameter.
+2. **Receptor-side valley confinement**: Berry School sits on the
+   Tijuana River valley floor where nocturnal cold-air drainage pools;
+   the SY monitor sits higher on the slope, above the shallow drainage
+   layer. Then the box needs a per-receptor H_mix / valley-membership
+   term, not (only) a distance kernel.
+These predict different things: (1) says NESTOR's excess should follow
+Saturn-Blvd-specific flow conditions; (2) says it should follow
+stability/drainage nights regardless of which source is active, and
+that *any* valley-floor receptor would see it while mesa receptors
+don't.
+
+**Next**: Needs field/terrain input to choose (elevations of the three
+monitors vs the valley floor would already discriminate). Kernel is
+merged-ready either way — it's the right chassis for both, and λ+tau
+remain calibratable in the eventual MCMC.
+
+## 2026-07-11 — sigmaz_sweep + regime stratification (the misfit lives in the stagnation box)
+
+**Question**: Is the σz scheme (Briggs rural over-diluting on stable
+nights) the missing NESTOR amplification the lid couldn't provide?
+
+**Result**: No — and the stratified view relocates the problem entirely.
+Two forward-path discoveries first:
+- **`service.run_forward` caches results by request hash** (temp-dir
+  JSON). Internal-physics variants that don't change the request hash
+  silently return the first variant's cached array — the first σz sweep
+  produced five identical columns this way. Defeat the cache (fresh
+  `CACHE_DIR` per variant) for any monkeypatched sensitivity study.
+  (No MCMC impact: identical request ⇒ identical result there.)
+- **Regime dispatch is live in every Sobol/MCMC run to date**:
+  `nrp/sobol.py` never sets `disable_regime_dispatch`, so calm night
+  hours (`is_night & u < 2.5 m/s`) are served by the **uncalibrated,
+  receptor-independent stagnation box**, not the plume. In the Mar 13–16
+  window that's **16 of 38 night hours** (22 night-windy, 34 day).
+
+Stratified obs vs prediction (baseline posterior-mean emissions):
+| stratum | NESTOR obs→pred | SY obs→pred | IB obs→pred |
+|---|---|---|---|
+| night-calm (box, 16 h) | **149.7 → 40.0** | 10.1 → 40.0 | 27.3 → 40.0 |
+| night-windy (plume, 22 h) | 15.4 → 9.7 | 6.7 → 7.8 | 3.1 → 9.3 |
+| day (plume, 34 h) | 6.6 → 1.0 | 3.3 → 11.0 | 2.0 → 2.1 |
+
+- **NESTOR's signal is almost entirely calm-night** (obs mean 149.7 ppb
+  there vs 6.6–15.4 elsewhere), and on exactly those hours the box
+  predicts a flat 40 ppb at every receptor — under NESTOR 3.7×, over
+  SAN YSIDRO 4×. σz variants (class shift +1/+2, σz×0.5/×0.3) by
+  construction cannot touch this stratum.
+- On the night-windy stratum σz does have leverage (up to 3.3× at
+  σz×0.3) but overshoots SY/IB badly; and that stratum's obs are small.
+  σz tuning is a second-order knob, not the fix.
+
+**The Saturn Blvd point** (field knowledge, 2026-07-11): the known
+source near NESTOR is the Tijuana River channel at the **Saturn Blvd
+crossing** — and `Saturn Blvd Bridge` (channel archetype) is already in
+the inventory at **0.89 km from NESTOR-BES**, the closest source to any
+receptor. But the v1 box is receptor-independent, so this proximity is
+*invisible on precisely the calm-night hours that dominate NESTOR's
+signal*. The geometry that should explain NESTOR≫SY/IB at night is
+discarded by the model component that rules those hours.
+
+**State change**: The NESTOR under-prediction is not a plume-physics
+problem (lid dead, σz second-order): **it's the uncalibrated,
+geometry-blind stagnation box**. The receptor pattern on calm nights
+(NESTOR 150 / IB 27 / SY 10) looks like distance-to-channel-sources —
+exactly what a receptor-dependent local-emissions kernel would produce
+with Saturn Blvd Bridge 0.89 km from NESTOR.
+
+**Next**: Make the stagnation box receptor-dependent: per-receptor
+`E_local` as a distance-weighted sum of source rates (e.g.
+`Σ_s rate_s · exp(-d_rs/λ)`), with λ, `tau_h`, and box height as
+calibratable parameters (service issue #3's planned follow-up; the "242
+Berry >100 ppb hours" are the natural calibration target). Forward-sweep
+λ locally first — same harness — before any MCMC.
+
+## 2026-07-11 — lid_forward_sweep (mixing-height hypothesis killed at the physics level)
+
+**Question**: At fixed emissions (baseline posterior means), does the
+nocturnal lid actually amplify predictions during NESTOR's night hours —
+i.e., could the MCMC treatment (below) have failed only because free
+`obs_sigma` out-competed the lid?
+
+**Result**: No — **the lid is essentially inert for this source–receptor
+geometry**. Local forward sweep, `L_night` ∈ {None, 50, 100, 200, 400} m,
+Mar 13–16 window (72 h, 38 nocturnal):
+- NESTOR night-mean prediction: 22.5 ppb unbounded → 27.3 at L=50 m
+  (**1.21×**), 23.0 at L=100, **1.00× at L≥200**. Needed: **3.2×**
+  (night obs mean 71.9). SAN YSIDRO/IB behave the same (≤1.11×/1.32× at
+  the extreme L=50, inert by L=200).
+- Why: the lid only bites when σz approaches L. Nocturnal stability here
+  is Pasquill D(25)/E(7)/F(6 hours) (night winds median 3.2 m/s), and
+  Briggs-rural σz at receptor distances is **7–103 m** — far below even a
+  200 m lid. The posterior's inability to identify `L_night` was correct:
+  the likelihood is genuinely flat in it.
+
+**State change**: The nocturnal mixing-lid hypothesis (open since
+2026-05-12, motivated 5–10× amplification) is **dead as the explanation
+for NESTOR's 3.4× under-prediction** — not confounded, not under-sampled;
+the plume physics cannot deliver the enhancement at these σz. Do NOT
+spend an MCMC on the σ-fixed lid re-run; the sweep already bounds its
+effect at ≤1.2×. The missing factor of ~3 at NESTOR nights must come from
+elsewhere: (a) emissions timing/magnitude at night (diel modifier shape),
+(b) a missing source near NESTOR, (c) met representativeness on calm
+nights (night winds down to 0.2 m/s; the logged "+125 ppb on S-wind calm
+hours"), or (d) the σ-scheme itself (Briggs rural may over-dilute in
+stable urban terrain — a *smaller* σz at night would raise concentrations
+without any lid).
+
+**Next**: Cheapest first: (1) forward sensitivity of NESTOR night bias to
+the σz scheme (e.g., urban McElroy–Pooler or a stability-class shift
+D→E/F) — same sweep harness, no MCMC; (2) check NERR (TJRTLMET) winds vs
+Open-Meteo for the calm-night hours (open question since 2026-05-05);
+(3) if neither closes the gap, revisit source inventory near NESTOR.
+
+## 2026-07-10 — mixing_height_treatment (lid + per-receptor obs_sigma; negative, confounded)
+
+**Question**: Does adding a nocturnal mixing lid (`mixing_height_night_m`,
+prior U(50, 500) m, binary `is_night` regime, `L_day`=1500 m fixed) fix the
+NESTOR 3.4× under-prediction — with per-receptor `obs_sigma` estimated in
+the same run so coverage is meaningful? (Design:
+`docs/mixing_height_experiment.md`; image `nrp-worker:2597a82`.)
+
+**Result**: Baseline re-run (same seed/window/particles, now archived:
+`runs/mcmc/…_seed42_2026-07-10/`) reproduces the mis-specification: max
+Rhat 1.09, 7/11 params railing, coverage 0–7%, NESTOR obs 41 → pred 12.
+Treatment (`runs/mcmc/…_seed42_mhlid_fitsig_2026-07-10/`) **converged
+beautifully (max Rhat 1.004, ESS ≥3200) but for the wrong reason**:
+- **`L_night` is unidentified**: posterior 280 ± 126 m, 94% HDI 79–492 —
+  essentially the U(50, 500) prior returned. The plausibility gate
+  (concentrate in ~50–300 m) FAILED.
+- **The free noise ate the signal**: fitted `obs_sigma` = 9.3 (SAN
+  YSIDRO), **89.3 (NESTOR — more than 2× the obs mean of 41)**, 17.7 (IB).
+  With NESTOR's misfit absorbable as noise, the likelihood preferred
+  *shrinking* emissions (`baseline_scale` 2.45→1.43, `diel_amplitude`
+  9.4→6.3) over using the lid: predicted means collapsed everywhere
+  (SY 16.3→4.1, NESTOR 12.2→**2.5**, IB 12.6→3.1). NESTOR bias *worsened*
+  3.4×→16×; its RMSE 83.8→93.5. Coverage "improved" to 18–29% purely via
+  inflated σ.
+- Several formerly-railing params (substrate_alpha, substrate_threshold,
+  diel_amplitude/phase) moved interior — but with posteriors ≈ priors,
+  i.e. released by the noise inflation, not newly identified.
+
+**State change**: Bundling the lid with free per-receptor `obs_sigma`
+(design decision #5) was a mistake — the two changes are confounded, and
+an unconstrained per-receptor σ gives a mis-specified mean model an escape
+hatch: explain NESTOR as pure noise and fit nothing. We have NOT yet
+tested the lid on its own; this run does not refute the mixing-height
+hypothesis, it refutes the joint design. Perfect Rhat under mis-specification
+is a warning sign, not a success.
+
+**Next**: (1) Re-run the treatment with the lid ON but `obs_sigma` FIXED
+at 10 (isolates the lid; one config flag). (2) If the lid then helps,
+re-introduce per-receptor σ with an informative prior (e.g. HalfNormal
+scaled to each receptor's obs spread) instead of flat, so it can't absorb
+3× bias. (3) Sanity-check the forward path: confirm the lid actually
+amplifies NESTOR's nocturnal hours at fixed emissions (one cheap forward
+sweep over `L_night` ∈ {50, 100, 200, 400} before burning another MCMC).
+
+## 2026-07-10 — mcmc_smc_calibration (first Bayesian posterior; model mis-specification confirmed)
+
+**Question**: Can a real Bayesian MCMC over the 11 emission parameters —
+not the old point-estimate calibration — produce a converged, calibrated
+posterior on the Mar 13–16 2026 window, and (the decisive test) does the
+dispersion model actually *fit* the observed H₂S once uncertainty is
+propagated?
+
+**Result**: The **pipeline works end-to-end on NRP** — 8 independent
+single-chain SMC fits (one K8s pod per chain, `pool="nrp_heavy"` capped at
+4, preemption-retry), fanned into `mcmc_aggregate` → cross-chain
+diagnostics + posterior-predictive skill → durable report at
+`s3://tj-calibration/runs/mcmc/2026-03-13_2026-03-16_8chains_500p_seed42_2026-07-10/`.
+SMC was used because the `tijuana_dispersion` forward model is a black box
+(no gradients for NUTS); priors are Sobol-informed. **The science verdict
+is negative and clear:**
+- **Not converged**: max Rhat 1.35 at 500 particles (500 was a deliberate
+  reduction from 1000 to survive NRP node preemption; convergence suffered
+  but is *secondary* to the finding below).
+- **7 of 11 parameters rail against their bounds even after widening them**
+  (Q10→floor, substrate_alpha/diel_amplitude/f_arch_bay→ceiling, etc.).
+  Widening just moved the rail — the signature of unidentifiability.
+- **Posterior-predictive fit is poor** (the decisive number). Mean 94%
+  interval coverage **2.8%** (target ~94%); per-receptor corr 0.08–0.50;
+  systematic bias: **NESTOR-BES (Berry) under-predicted 3.4×** (obs 41 →
+  pred 12, RMSE 84), **SAN YSIDRO over-predicted 2.8×** (obs 6 → pred 16).
+  `obs_sigma=10 ppb` is far too small vs RMSE 20–84, so the likelihood is
+  over-confident and coverage collapses to ~0.
+
+**State change**: We now have (a) a working, reusable Bayesian calibration
+pipeline with uncertainty quantification and a durable report, and (b) a
+quantified conclusion that **the current dispersion+emission model cannot
+reproduce this window's concentrations** — the parameter railing is a
+*symptom* of structural mis-specification, not a bounds or particle-count
+problem. This corroborates standing open questions: the **NESTOR under-
+prediction 3.4×** aligns with the nocturnal **mixing-height collapse**
+hypothesis (unbounded vertical mixing → 5–10× under-prediction of
+ground-level concentration) and the logged "+125 ppb NESTOR under-
+prediction on calm S-wind hours"; the over-confident likelihood shows the
+noise model needs to be realistic/estimated.
+
+**Next**: Model-side experiments, now cheap to run through this pipeline:
+(1) add a **mixing-height cap** to the forward model and re-fit — expected
+to lift NESTOR predictions most; (2) **estimate `obs_sigma`** (ideally
+per-receptor) instead of fixing it, so coverage is meaningful; (3) **fix
+the near-inert `f_arch_*` fractions** to remove degeneracy; then re-run at
+≥1000 particles once a non-preemptible/short-enough configuration is
+sorted (or after an NRP priority-class request) to confirm convergence.
+
 ## 2026-06-24 — multi-window Sobol deferred; MCMC design phase begins
 
 **Question**: Can we validate the single-window Sobol sensitivities across

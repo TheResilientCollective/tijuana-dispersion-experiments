@@ -350,6 +350,86 @@ status and archive tag — copy the tags into `fetch_sobol_results.py
 - **Backfill submission**: The `dg launch` CLI cannot submit
   multi-partition backfills. Use the GraphQL API via
   `nrp/scripts/_submit_backfill.py`.
+- **NRP 4-pod policy — DEBUNKED 2026-07-14**: NRP support states there is
+  no concurrent-pod limit, and the namespace has no pod/CPU ResourceQuota.
+  The eviction pattern below was node-side reclamation (long CPU pods with
+  usage ≫ request are prime eviction targets; some node classes churn on a
+  ~5 h cadence). Mitigations: memory requests sized to usage, run-worker
+  resume (`maxResumeRunAttempts`), step retries, chains kept shorter than
+  the churn cadence, `nrp_heavy` pool limit raised to 16. The pool remains
+  useful as OUR throttle, not NRP's. Original (wrong) analysis kept below
+  for the observational record.
+- **NRP 4-pod policy** (seen 2026-07-08, root-caused the MCMC chain
+  failures): a user may run **at most 4 concurrent pods** that are
+  "resource-using", i.e. that request more than **1 CPU / 2GB memory**.
+  Pods requesting *exactly* 1 CPU core and 2GB memory are **exempt** and
+  can run in unlimited numbers. Implications for this repo:
+  - Sobol chunk workers (`_WORKER_K8S_TAGS`, limits 1 CPU / 2Gi) are
+    exempt → the 100-chunk backfill fans out freely.
+  - MCMC chain pods (`_MCMC_K8S_TAGS`, 8Gi / 2 CPU limits) are NOT
+    exempt → only 4 run at once; a >4-wide chain backfill loses the
+    overflow to eviction ~minutes in. Run MCMC chains in **waves of
+    ≤4**, or make the pods exempt (request=limit 1 CPU / 2Gi) and shrink
+    the per-chain particle count so a single SMC chain fits 2Gi.
+  - The exemption keys off the pod's *request/limit*, not observed use.
+  - **Enforcement**: OP-LEVEL POOLS. Heavy assets declare
+    `pool="nrp_heavy"` in `dagster_pipeline.py`; the instance
+    `concurrency:` block sets `pools.granularity: op`,
+    `pools.defaultLimit: 4`, and `runs.maxConcurrentRuns: 25`. The pool
+    limit travels with the asset for every launch path (backfill,
+    automation, UI) — no submission-time tagging. A **single shared**
+    pool (not per-pipeline) is required because the NRP cap is on *total*
+    non-exempt pods across MCMC *and* CV. Sobol chunks are exempt →
+    unpooled → bounded only by `maxConcurrentRuns`. Takes effect on
+    `helm upgrade`.
+- **Code-location readiness probe** (seen 2026-07-07): the chart's
+  default readiness probe runs `dagster api grpc-health-check -p 3030`
+  with a 10s timeout. Under the 500m CPU limit the CLI startup exceeds
+  10s, so the `dagster-user-deployments-nrp` pod never becomes `Ready`,
+  is dropped from the Service, and the webserver reports
+  `DagsterUserCodeUnreachableError` / gRPC `UNAVAILABLE` — no
+  submission possible. Fix: a `readinessProbe` override
+  (`timeoutSeconds: 60`, `periodSeconds: 30`, `failureThreshold: 8`)
+  on the `nrp` deployment in `dagster-values.yaml`. Symptom check:
+  `kubectl get pods -n ucsd-center4health -l deployment=nrp` shows
+  `0/1 Running`, and `kubectl describe` shows repeated
+  `Readiness probe failed: ... grpc-health-check ... timed out`.
+
+## Postgres — Zalando operator (NRP-preferred, replaces the Bitnami subchart)
+
+Per https://nrp.ai/documentation/userdocs/running/postgres/ the DB is an
+**external Zalando-operator cluster** (`acid.zalan.do/v1`), not the chart's
+bundled subchart. Manifest: **`nrp/k8s/postgres-zalando.yaml`** (2 instances,
+Linstor `linstor-igrok`, 8Gi, user+db `dagster`). The chart is set to
+`postgresql.enabled: false` + `postgresqlHost: dagster-pg`, and
+`global.postgresqlSecretName: dagster-pg-cred`.
+
+**Cutover (run as single-line commands — no `\` continuations):**
+
+```bash
+# 1. create the cluster
+kubectl apply -f nrp/k8s/postgres-zalando.yaml
+# 2. wait until Running (operator provisions 2 pods + the credentials secret)
+kubectl get postgresql dagster-pg -n ucsd-center4health -w   # STATUS -> Running, then Ctrl-C
+# 3. bridge the password into the key the chart expects (postgresql-password)
+PW=$(kubectl get secret dagster.dagster-pg.credentials.postgresql.acid.zalan.do -n ucsd-center4health -o jsonpath='{.data.password}' | base64 -d)
+kubectl create secret generic dagster-pg-cred -n ucsd-center4health --from-literal=postgresql-password="$PW"
+# 4. point Dagster at it (starts fresh — Dagster recreates its schema)
+helm upgrade dagster dagster/dagster -n ucsd-center4health --version 1.13.5 -f nrp/k8s/dagster-values.yaml --take-ownership
+# 5. verify: daemon/webserver Running, code location LOADED
+kubectl get pods -n ucsd-center4health
+# 6. once confirmed healthy, remove the old bundled DB
+kubectl delete statefulset dagster-postgresql -n ucsd-center4health
+kubectl delete pvc data-dagster-postgresql-0 -n ucsd-center4health
+```
+
+Notes:
+- Zalando's secret key is `password`; the Dagster chart wants
+  `postgresql-password` — hence the bridge secret in step 3. If the operator
+  ever rotates the password, re-run steps 3–4.
+- Run history does NOT carry over (fresh start). All calibration *results*
+  live in S3 (`runs/…` + `dagster/runs/…`), so nothing scientific is lost.
+- Health: `kubectl get postgresql -n ucsd-center4health`.
 
 ## 8. Saturn→Nestor HYSPLIT workload (`saturn_nestor_job`)
 

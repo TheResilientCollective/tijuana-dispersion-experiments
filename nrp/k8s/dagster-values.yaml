@@ -14,9 +14,12 @@
 # paths against `helm show values dagster/dagster` for that version.
 
 global:
-  # The Bitnami subchart auto-creates secret `dagster-postgresql`;
-  # point Dagster at the same one so passwords stay in sync.
-  postgresqlSecretName: dagster-postgresql  # pragma: allowlist secret  (secret *name*, not a value)
+  # Postgres is now the external Zalando-operator cluster (nrp/k8s/
+  # postgres-zalando.yaml), NOT the chart's bundled subchart. Dagster reads
+  # the password from this secret's `postgresql-password` key — a bridge
+  # secret copied from Zalando's generated `dagster.dagster-pg.credentials...`
+  # secret (whose key is `password`). See DEPLOYMENT.md §Postgres.
+  postgresqlSecretName: dagster-pg-cred  # pragma: allowlist secret  (secret *name*, not a value)
 
 imagePullSecrets:
   - name: gitlab-registry-cred
@@ -33,20 +36,20 @@ serviceAccount:
 # partitioned materialization does not execute.
 dagsterDaemon:
   enabled: true
-  # Run queue: one shared cap across BOTH code locations (nrp + nrp-hysplit)
-  # so a HYSPLIT run and a sobol backfill can't jointly blow the NRP
-  # 4-concurrent-pod policy. The HYSPLIT job is additionally capped at 1
-  # concurrent run so it can never crowd out an in-flight sobol backfill.
-  runCoordinator:
+  # NRP nodes are preemptible and reclaim RUN-WORKER pods too, not just
+  # step pods (2026-07-13: a node sweep killed all 8 pooled-fit run
+  # workers; run monitoring marked the runs FAILED while their step jobs
+  # kept sampling as orphans). maxResumeRunAttempts lets the monitoring
+  # daemon relaunch the run worker, which re-adopts in-flight steps.
+  runMonitoring:
     enabled: true
-    type: QueuedRunCoordinator
-    config:
-      queuedRunCoordinator:
-        maxConcurrentRuns: 4
-        tagConcurrencyLimits:
-          - key: "dagster/job_name"
-            value: "saturn_nestor_job"
-            limit: 1
+    startTimeoutSeconds: 300
+    maxResumeRunAttempts: 3
+    pollIntervalSeconds: 120
+  # Failed runs also get one automatic full retry as a safety net.
+  runRetries:
+    enabled: true
+    maxRetries: 1
   resources:
     requests:
       cpu: 100m
@@ -54,6 +57,9 @@ dagsterDaemon:
     limits:
       cpu: 500m
       memory: 512Mi
+  # Run concurrency is configured in the top-level `concurrency:` block
+  # (see bottom of file). The chart forbids also setting maxConcurrentRuns /
+  # tagConcurrencyLimits here under runCoordinator, so we leave this default.
 
 dagsterWebserver:
   replicaCount: 1
@@ -83,40 +89,20 @@ runLauncher:
       envSecrets:
         - name: object-store-credentials
 
-# Built-in Postgres (managed by the Dagster Helm chart).
-# This DB holds all run history, event logs, and schedule/sensor state.
-# It MUST be on a persistent volume or every pod restart wipes the run list.
+# EXTERNAL Postgres — the Zalando-operator cluster `dagster-pg`
+# (nrp/k8s/postgres-zalando.yaml), NRP's preferred approach. The chart's
+# bundled Bitnami subchart is DISABLED; Dagster connects to the operator's
+# primary Service `dagster-pg:5432` and reads the password from the
+# `dagster-pg-cred` secret (global.postgresqlSecretName above).
+#
+# Holds run history, event logs, schedule/sensor state — durable on Linstor,
+# 2 instances (primary + replica) for failover, managed by the operator.
 generatePostgresqlPasswordSecret: false
 postgresql:
-  enabled: true
+  enabled: false
+  postgresqlHost: dagster-pg
   postgresqlUsername: dagster
   postgresqlDatabase: dagster
-  # Persist the data dir (/bitnami/postgresql) on a network-backed volume.
-  # Pinned explicitly so it can never silently regress to an emptyDir if a
-  # chart-default changes — losing run history is the failure this prevents.
-  #
-  # storageClass is intentionally LEFT UNSET so it resolves to the NRP
-  # cluster default `rook-ceph-block` (Ceph RBD — network storage that
-  # survives the postgres pod rescheduling across NRP nodes; a node-local
-  # class such as `local-storage` would strand the data on one node).
-  # Do NOT add `storageClass:` here on an existing release: a StatefulSet's
-  # volumeClaimTemplates are immutable, so changing it makes `helm upgrade`
-  # fail. To switch classes you must `kubectl delete statefulset
-  # dagster-postgresql --cascade=orphan` first (keeps the pod + PVC), then
-  # upgrade. The current bound PVC `data-dagster-postgresql-0` is already on
-  # rook-ceph-block, so the values below render an identical template.
-  persistence:
-    enabled: true
-    size: 8Gi
-    accessModes:
-      - ReadWriteOnce
-  resources:
-    requests:
-      cpu: 100m
-      memory: 256Mi
-    limits:
-      cpu: 500m
-      memory: 512Mi
   service:
     port: 5432
 
@@ -135,23 +121,58 @@ dagster-user-deployments:
     - name: nrp
       # digest-pinned worker image (must match nrp/.env
       # DAGSTER_IMAGE; build/push per nrp/DEPLOYMENT.md §1).
+      # CPU limit history: at 500m the gRPC code server chokes when a
+      # backfill launch fans out (8 run workers + daemon all request
+      # definitions), the daemon sees the location as failing to load,
+      # and DagsterAssetBackfillDataLoadError cancels the whole backfill
+      # (killed backfills nwtdwhfy + jlccgikv, 2026-07-15). Give it a
+      # full core and headroom.
       resources:
         requests:
-          cpu: 100m
-          memory: 256Mi
-        limits:
           cpu: 500m
           memory: 512Mi
+        limits:
+          cpu: "1"
+          memory: 2Gi
       image:
         repository: gitlab-registry.nrp-nautilus.io/ucsd-center4health/nrp-worker
-        tag: "dev"
+        # SHA-pinned, NOT :dev — step pods use imagePullPolicy IfNotPresent
+        # (runLauncher), so a mutable :dev tag can leave stale code cached on
+        # nodes. An immutable per-commit tag forces a fresh pull everywhere.
+        tag: "7f67e31"
         pullPolicy: Always
       dagsterApiGrpcArgs:
         - "-m"
         - "nrp.definitions"
       port: 3030
+      # The gRPC health-check CLI (`dagster api grpc-health-check`) is
+      # CPU-bound at container startup; under the 500m CPU limit it
+      # regularly exceeds the chart's default 10s probe timeout, so the
+      # pod never becomes Ready and the webserver can't reach the code
+      # location (DagsterUserCodeUnreachableError / gRPC UNAVAILABLE).
+      # Give the probe room. See DEPLOYMENT.md §7.
+      readinessProbe:
+        enabled: true
+        timeoutSeconds: 60
+        periodSeconds: 30
+        failureThreshold: 8
       includeConfigInLaunchedRuns:
         enabled: true
+      env:
+        # Kill the forward request cache in all launched pods: calibration
+        # requests are unique per SMC particle, so the cache never hits but
+        # writes ~8 GB/h of JSON per chain pod — filled the 50Gi ephemeral
+        # limit in ~5 h and got pods evicted (2026-07-14 diagnosis).
+        # Propagates to run + step pods via includeConfigInLaunchedRuns.
+        - name: DISPERSION_DISABLE_CACHE
+          value: "1"
+        # NRP reservation (2026-07-14 grant): set to the exact value of the
+        # nautilus.io/reservation node taint. When set, heavy (nrp_heavy)
+        # pods tolerate + pin to the reserved nodes (dagster_pipeline.py
+        # reads it at code-location load; a deployment restart applies it —
+        # no image rebuild). Leave unset to schedule on general nodes.
+        # - name: NRP_RESERVATION
+        #   value: "<exact-taint-value-from-NRP>"
       envSecrets:
         - name: object-store-credentials
     - name: nrp-hysplit
@@ -176,3 +197,44 @@ dagster-user-deployments:
         enabled: true
       envSecrets:
         - name: object-store-credentials
+
+# ============================================================
+# Concurrency (modern top-level block; do NOT also set
+# maxConcurrentRuns/tagConcurrencyLimits under dagsterDaemon.runCoordinator).
+# ============================================================
+#
+# NRP caps a user at 4 concurrent "resource-using" pods — any pod requesting
+# MORE than 1 CPU / 2GB. Pods at exactly 1 CPU / 2Gi are exempt, so the Sobol
+# chunk workers (limits 1 CPU / 2Gi) fan out freely under maxConcurrentRuns.
+# The heavy workloads — MCMC chains, CV folds, and all aggregators (2 CPU /
+# 8Gi) — are NOT exempt.
+#
+# Enforced with OP-LEVEL POOLS rather than run tags: the heavy assets declare
+# `pool="nrp_heavy"` in code (nrp/dagster_pipeline.py), so the limit travels
+# with the asset automatically for every launch path (backfill, automation,
+# UI) — no submission-time tagging needed. granularity=op limits concurrent
+# *step pods*; defaultLimit=4 caps the nrp_heavy pool at the NRP ceiling. A
+# single shared pool (not per-pipeline) is required because NRP's cap is on
+# TOTAL non-exempt pods across MCMC + CV. Unpooled ops (Sobol chunks, exempt)
+# are unbounded here, governed only by maxConcurrentRuns.
+concurrency:
+  enabled: true
+  pools:
+    granularity: "op"
+    # 2026-07-14: NRP raised our concurrent heavy-pod allowance to 16
+    # (was the 4-pod courtesy cap) — a full 8-chain MCMC backfill plus
+    # CV folds can now run in one wave.
+    defaultLimit: 16
+    # Allow plenty of runs to queue while blocked on a pool slot (8 MCMC
+    # chains + CV folds contend for 4 slots).
+    opGranularityRunBuffer: 25
+  runs:
+    maxConcurrentRuns: 25
+    # The HYSPLIT job stays capped at 1 concurrent run so it can never
+    # crowd out an in-flight sobol backfill (moved here from the old
+    # dagsterDaemon.runCoordinator block — the chart forbids setting
+    # tagConcurrencyLimits both places).
+    tagConcurrencyLimits:
+      - key: "dagster/job_name"
+        value: "saturn_nestor_job"
+        limit: 1

@@ -6,7 +6,7 @@ Both supported datasets live in the NOAA ARL AWS Open Data archive
 - ``hrrr`` (default): 3 km CONUS, 6-hour chunks of ~3.4 GB at
   ``hrrr/{YYYY}/{MM}/{YYYYMMDD}_{00-05|06-11|12-17|18-23}_hrrr`` — the right
   resolution for the ~880 m Saturn→Nestor problem.
-- ``gdas1``: 1° weekly files (~600 MB) at ``gdas1/gdas1.{mon}{yy}.w{n}`` —
+- ``gdas1``: 1° weekly files (~600 MB) at ``gdas1/{YYYY}/gdas1.{mon}{yy}.w{n}`` —
   cheap smoke tests / fallback.
 
 ``ensure_met_files`` resolves each file through a chain, first hit wins:
@@ -83,7 +83,8 @@ def met_files_for(met_source: str, start_utc: pd.Timestamp, end_utc: pd.Timestam
     while day <= end_utc:
         if met_source == "gdas1":
             name = _gdas1_name(day)
-            key = f"gdas1/{name}"
+            # The archive nests weekly files under the year: gdas1/2026/gdas1.apr26.w1
+            key = f"gdas1/{day.strftime('%Y')}/{name}"
             if name not in seen:
                 seen.add(name)
                 out.append(MetFile(name, key, min_bytes))

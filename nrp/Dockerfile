@@ -13,6 +13,10 @@
 # Token-free local sanity build (deps + code only, no service extra):
 #   docker build -f nrp/Dockerfile --target base -t nrp-worker:base .
 
+# Declared before the first FROM (global scope) — an ARG inside a stage
+# is invisible to later FROM lines, which fails the worker-hysplit stage.
+ARG HYSPLIT_BASE=ghcr.io/center4health/geodemichysplit:latest
+
 FROM python:3.12-slim AS base
 
 # System deps for scipy/numpy wheels, S3 client, and the git VCS
@@ -79,7 +83,7 @@ RUN --mount=type=secret,id=gh_token sh /tmp/with_gh_auth.sh && rm /tmp/with_gh_a
 # read:packages on center4health. Pin a digest via
 #   --build-arg HYSPLIT_BASE=ghcr.io/center4health/geodemichysplit@sha256:…
 # (The pre-derivation tarball/donor stages live in git history: b381d15.)
-ARG HYSPLIT_BASE=ghcr.io/center4health/geodemichysplit:latest
+# HYSPLIT_BASE is declared at the top of the file (global ARG scope).
 FROM ${HYSPLIT_BASE} AS worker-hysplit
 USER root
 # git: needed for the private tijuana-dispersion VCS dep (base has none).
@@ -88,6 +92,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 WORKDIR /nrp
 # The base is Python 3.13; this repo pins ==3.12.* — uv provisions a
 # managed 3.12 for the /nrp venv (locked wheels are proven on 3.12/amd64).
+# UV_PYTHON_INSTALL_DIR must be world-readable: the default is
+# /root/.local/share/uv (mode-700 /root), which leaves the venv's python
+# symlink Permission-denied for the non-root geodemic runtime user.
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
 RUN uv python install 3.12
 COPY pyproject.toml uv.lock* ./
 RUN uv sync --frozen --no-dev --no-install-project

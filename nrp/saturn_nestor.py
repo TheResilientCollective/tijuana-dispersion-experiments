@@ -92,7 +92,7 @@ def setup_cfg(numpar: int = 2500, use_emitimes: bool = False) -> str:
         "  KMSL    = 0,\n"
         "  NINIT   = 1,\n"
         "  DELT    = 0.0,\n"
-        "  KTURB   = 1,\n"
+        "  KBLT    = 1,\n"
         "  KZMIX   = 1,\n"
         "  TVMIX   = 1.0,\n"
         "  KHMAX   = 9999,\n"

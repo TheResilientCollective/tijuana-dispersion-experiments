@@ -109,7 +109,7 @@ def test_emitimes_records() -> None:
 def test_gdas1_single_week() -> None:
     files = metfetch.met_files_for("gdas1", pd.Timestamp("2026-04-03"), pd.Timestamp("2026-04-06"))
     assert [f.name for f in files] == ["gdas1.apr26.w1"]
-    assert files[0].key == "gdas1/gdas1.apr26.w1"
+    assert files[0].key == "gdas1/2026/gdas1.apr26.w1"
 
 
 def test_gdas1_backward_reach_crosses_month() -> None:
